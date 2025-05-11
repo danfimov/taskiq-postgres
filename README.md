@@ -3,7 +3,7 @@
 [![Checks](https://img.shields.io/github/checks-status/danfimov/taskiq-postgres/main?style=for-the-badge&logo=pytest)](https://github.com/danfimov/taskiq-postgres)
 
 <div align="center">
-<a href="https://github.com/danfimov/taskiq-postgres/"><img src="assets/logo.png" width=400></a>
+<a href="https://github.com/danfimov/taskiq-postgres/"><img src="https://raw.githubusercontent.com/danfimov/taskiq-postgres/main/assets/logo.png" width=400></a>
 <hr/>
 </div>
 
