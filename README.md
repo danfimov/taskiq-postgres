@@ -4,7 +4,12 @@
 [![PyPI](https://img.shields.io/pypi/v/taskiq-postgres?style=for-the-badge&logo=pypi)](https://pypi.org/project/taskiq-postgres/)
 [![Checks](https://img.shields.io/github/checks-status/danfimov/taskiq-postgres/main?style=for-the-badge&logo=pytest)](https://github.com/danfimov/taskiq-postgres)
 
-PostgreSQL integration for Taskiq.
+<div align="center">
+<a href="https://github.com/danfimov/taskiq-postgres/"><img src="assets/logo.png" width=400></a>
+<hr/>
+</div>
+
+PostgreSQL integration for Taskiq with support for asyncpg, psqlpy and aiopg drivers.
 
 ## Installation
 
