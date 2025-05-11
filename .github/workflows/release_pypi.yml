@@ -17,5 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - run: uv version "${{ github.ref_name }}"
       - run: uv build
       - run: uv publish --trusted-publishing always
