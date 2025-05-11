@@ -1,6 +1,6 @@
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/taskiq-postgres?style=for-the-badge&logo=python)](https://pypi.org/project/taskiq-postgres/)
 [![PyPI](https://img.shields.io/pypi/v/taskiq-postgres?style=for-the-badge&logo=pypi)](https://pypi.org/project/taskiq-postgres/)
-[![Checks](https://img.shields.io/github/checks-status/danfimov/taskiq-postgres/main?style=for-the-badge&logo=pytest)](https://github.com/danfimov/taskiq-postgres)
+[![Checks](https://img.shields.io/github/check-runs/danfimov/taskiq-postgres/main?style=for-the-badge&logo=pytest)](https://github.com/danfimov/taskiq-postgres)
 
 <div align="center">
 <a href="https://github.com/danfimov/taskiq-postgres/"><img src="https://raw.githubusercontent.com/danfimov/taskiq-postgres/main/assets/logo.png" width=400></a>
