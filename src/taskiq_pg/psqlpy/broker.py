@@ -5,8 +5,8 @@ import logging
 import typing as tp
 from dataclasses import dataclass
 
-import psqlpy
-from psqlpy.extra_types import JSONB
+import psqlpy  # type: ignore[import-not-found]
+from psqlpy.extra_types import JSONB  # type: ignore[import-not-found]
 from taskiq import AckableMessage, AsyncBroker, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg.psqlpy.queries import (

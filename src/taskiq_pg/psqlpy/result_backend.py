@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import typing as tp
 
-from psqlpy import ConnectionPool
-from psqlpy.exceptions import RustPSQLDriverPyBaseError
+from psqlpy import ConnectionPool  # type: ignore[import-not-found]
+from psqlpy.exceptions import RustPSQLDriverPyBaseError  # type: ignore[import-not-found]
 from taskiq import AsyncResultBackend, TaskiqResult
 from taskiq.compat import model_dump, model_validate
 from taskiq.serializers import PickleSerializer
