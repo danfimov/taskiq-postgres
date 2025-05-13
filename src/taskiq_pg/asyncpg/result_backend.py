@@ -6,7 +6,6 @@ import asyncpg
 from taskiq import AsyncResultBackend, TaskiqResult
 from taskiq.compat import model_dump, model_validate
 from taskiq.serializers import PickleSerializer
-from typing_extensions import override
 
 from taskiq_pg.asyncpg.queries import (
     CREATE_INDEX_QUERY,
@@ -67,7 +66,6 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
             return self._dsn()
         return self._dsn
 
-    @override
     async def startup(self) -> None:
         """
         Initialize the result backend.
@@ -96,12 +94,11 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
             ),
         )
 
-    @override
     async def shutdown(self) -> None:
         """Close the connection pool."""
-        await self._database_pool.close()
+        if getattr(self, "_database_pool", None) is not None:
+            await self._database_pool.close()
 
-    @override
     async def set_result(
         self,
         task_id: str,
@@ -121,7 +118,6 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
             self.serializer.dumpb(model_dump(result)),
         )
 
-    @override
     async def is_result_ready(self, task_id: str) -> bool:
         """
         Returns whether the result is ready.
@@ -139,7 +135,6 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
             ),
         )
 
-    @override
     async def get_result(
         self,
         task_id: str,

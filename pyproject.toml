@@ -39,7 +39,7 @@ dependencies = [
 "Bug Tracker" = "https://github.com/danfimov/taskiq-postgres/issues"
 "Repository" = "https://github.com/danfimov/taskiq-postgres/"
 
-[dependency-groups]
+[project.optional-dependencies]
 aiopg = [
     "aiopg>=1.4.0",
 ]
@@ -49,6 +49,7 @@ asyncpg = [
 psqlpy = [
     "psqlpy>=0.10.1",
 ]
+[dependency-groups]
 dev = [
     "ruff>=0.11.9",
     "pytest>=8.3.5",
