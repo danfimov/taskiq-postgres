@@ -76,7 +76,7 @@ class AiopgResultBackend(AsyncResultBackend[_ReturnType]):
 
     async def shutdown(self) -> None:
         """Close the connection pool."""
-        if getattr(self, '_database_pool', None) is not None:
+        if getattr(self, "_database_pool", None) is not None:
             self._database_pool.close()
 
     async def set_result(
