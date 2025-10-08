@@ -31,7 +31,7 @@ authors = [
 ]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "taskiq>=0.11.17",
+    "taskiq>=0.11.18",
 ]
 
 [project.urls]
