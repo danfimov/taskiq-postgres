@@ -1,0 +1,10 @@
+services:
+  postgres:
+    container_name: taskiq_postgres
+    image: postgres:18
+    environment:
+      POSTGRES_DB: taskiq_postgres
+      POSTGRES_USER: taskiq_postgres
+      POSTGRES_PASSWORD: look_in_vault
+    ports:
+      - "5432:5432"

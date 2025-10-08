@@ -46,7 +46,7 @@ asyncpg = [
     "asyncpg>=0.30.0",
 ]
 psqlpy = [
-    "psqlpy>=0.10.1",
+    "psqlpy>=0.11.6",
 ]
 
 [dependency-groups]
@@ -59,6 +59,7 @@ dev = [
     # tests
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
+    "pytest-cov>=7.0.0",
     # pre-commit hooks
     "prek>=0.2.4",
     # docs
@@ -83,6 +84,24 @@ markers = [
     "unit: marks unit tests",
     "integration: marks tests with real infrastructure env",
 ]
+
+
+[tool.coverage.report]
+exclude_lines = [
+    "# pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "def __unicode__",
+    "if tp.TYPE_CHECKING:",
+]
+show_missing = true
+skip_empty = true
+omit = [
+    "*/__init__.py",
+    "venv/*",
+    "tests/*"
+]
+
 
 [tool.ruff]
 line-length = 120

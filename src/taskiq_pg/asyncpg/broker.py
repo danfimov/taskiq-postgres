@@ -6,8 +6,9 @@ import logging
 import typing as tp
 
 import asyncpg
-from taskiq import AckableMessage, AsyncBroker, AsyncResultBackend, BrokerMessage
+from taskiq import AckableMessage, BrokerMessage
 
+from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg.asyncpg.queries import (
     CREATE_MESSAGE_TABLE_QUERY,
     DELETE_MESSAGE_QUERY,
@@ -20,75 +21,24 @@ if tp.TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 
-_T = tp.TypeVar("_T")
 logger = logging.getLogger("taskiq.asyncpg_broker")
 
 
-class AsyncpgBroker(AsyncBroker):
-    """Broker that uses PostgreSQL and asyncpg with LISTEN/NOTIFY."""
+class AsyncpgBroker(BasePostgresBroker):
+    """Broker that uses asyncpg as driver and PostgreSQL with LISTEN/NOTIFY mechanism."""
 
-    def __init__(
-        self,
-        dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
-        result_backend: AsyncResultBackend[_T] | None = None,
-        task_id_generator: tp.Callable[[], str] | None = None,
-        channel_name: str = "taskiq",
-        table_name: str = "taskiq_messages",
-        max_retry_attempts: int = 5,
-        connection_kwargs: dict[str, tp.Any] | None = None,
-        pool_kwargs: dict[str, tp.Any] | None = None,
-    ) -> None:
-        """
-        Construct a new broker.
-
-        :param dsn: connection string to PostgreSQL, or callable returning one.
-        :param result_backend: Custom result backend.
-        :param task_id_generator: Custom task_id generator.
-        :param channel_name: Name of the channel to listen on.
-        :param table_name: Name of the table to store messages.
-        :param max_retry_attempts: Maximum number of message processing attempts.
-        :param connection_kwargs: Additional arguments for asyncpg connection.
-        :param pool_kwargs: Additional arguments for asyncpg pool creation.
-        """
-        super().__init__(
-            result_backend=result_backend,
-            task_id_generator=task_id_generator,
-        )
-        self._dsn: str | tp.Callable[[], str] = dsn
-        self.channel_name: str = channel_name
-        self.table_name: str = table_name
-        self.connection_kwargs: dict[str, tp.Any] = (
-            connection_kwargs if connection_kwargs else {}
-        )
-        self.pool_kwargs: dict[str, tp.Any] = pool_kwargs if pool_kwargs else {}
-        self.max_retry_attempts: int = max_retry_attempts
-        self.read_conn: asyncpg.Connection[asyncpg.Record] | None = None
-        self.write_pool: asyncpg.pool.Pool[asyncpg.Record] | None = None
-        self._queue: asyncio.Queue[str] | None = None
-
-    @property
-    def dsn(self) -> str:
-        """
-        Get the DSN string.
-
-        Returns the DSN string or None if not set.
-        """
-        if callable(self._dsn):
-            return self._dsn()
-        return self._dsn
+    read_conn: asyncpg.Connection[asyncpg.Record] | None = None
+    write_pool: asyncpg.pool.Pool[asyncpg.Record] | None = None
 
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
 
-        self.read_conn = await asyncpg.connect(self.dsn, **self.connection_kwargs)
-        self.write_pool = await asyncpg.create_pool(self.dsn, **self.pool_kwargs)
+        self.read_conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
+        self.write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
 
         if self.read_conn is None:
             msg = "read_conn not initialized"
-            raise RuntimeError(msg)
-        if self.write_pool is None:
-            msg = "write_pool not initialized"
             raise RuntimeError(msg)
 
         async with self.write_pool.acquire() as conn:
@@ -193,11 +143,13 @@ class AsyncpgBroker(AsyncBroker):
                 payload = await self._queue.get()
                 message_id = int(payload)
                 message_row = await self.read_conn.fetchrow(
-                    SELECT_MESSAGE_QUERY.format(self.table_name), message_id,
+                    SELECT_MESSAGE_QUERY.format(self.table_name),
+                    message_id,
                 )
                 if message_row is None:
                     logger.warning(
-                        "Message with id %s not found in database.", message_id,
+                        "Message with id %s not found in database.",
+                        message_id,
                     )
                     continue
                 if message_row.get("message") is None:

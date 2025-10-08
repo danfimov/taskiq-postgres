@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import typing as tp
 
-from psqlpy import ConnectionPool  # type: ignore[import-not-found]
-from psqlpy.exceptions import RustPSQLDriverPyBaseError  # type: ignore[import-not-found]
-from taskiq import AsyncResultBackend, TaskiqResult
+from psqlpy import ConnectionPool
+from psqlpy.exceptions import BaseConnectionError
+from taskiq import TaskiqResult
 from taskiq.compat import model_dump, model_validate
-from taskiq.serializers import PickleSerializer
 
+from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.exceptions import ResultIsMissingError
 from taskiq_pg.psqlpy.queries import (
     CREATE_INDEX_QUERY,
@@ -19,43 +19,10 @@ from taskiq_pg.psqlpy.queries import (
 )
 
 
-if tp.TYPE_CHECKING:
-    from taskiq.abc.serializer import TaskiqSerializer
-
-
-_ReturnType = tp.TypeVar("_ReturnType")
-
-
-class PSQLPyResultBackend(AsyncResultBackend[_ReturnType]):
+class PSQLPyResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on PSQLPy."""
 
-    def __init__(
-        self,
-        dsn: str | None = "postgres://postgres:postgres@localhost:5432/postgres",
-        keep_results: bool = True,
-        table_name: str = "taskiq_results",
-        field_for_task_id: tp.Literal["VarChar", "Text"] = "VarChar",
-        serializer: TaskiqSerializer | None = None,
-        **connect_kwargs: tp.Any,
-    ) -> None:
-        """
-        Construct new result backend.
-
-        :param dsn: connection string to PostgreSQL.
-        :param keep_results: flag to not remove results from Redis after reading.
-        :param table_name: name of the table to store results.
-        :param field_for_task_id: type of the field to store task_id.
-        :param serializer: serializer class to serialize/deserialize result from task.
-        :param connect_kwargs: additional arguments for nats `ConnectionPool` class.
-        """
-        self.dsn: tp.Final = dsn
-        self.keep_results: tp.Final = keep_results
-        self.table_name: tp.Final = table_name
-        self.field_for_task_id: tp.Final = field_for_task_id
-        self.connect_kwargs: tp.Final = connect_kwargs
-        self.serializer = serializer or PickleSerializer()
-
-        self._database_pool: ConnectionPool
+    _database_pool: ConnectionPool
 
     async def startup(self) -> None:
         """
@@ -90,7 +57,7 @@ class PSQLPyResultBackend(AsyncResultBackend[_ReturnType]):
     async def set_result(
         self,
         task_id: str,
-        result: TaskiqResult[_ReturnType],
+        result: TaskiqResult[ReturnType],
     ) -> None:
         """
         Set result to the PostgreSQL table.
@@ -132,7 +99,7 @@ class PSQLPyResultBackend(AsyncResultBackend[_ReturnType]):
         self,
         task_id: str,
         with_logs: bool = False,
-    ) -> TaskiqResult[_ReturnType]:
+    ) -> TaskiqResult[ReturnType]:
         """
         Retrieve result from the task.
 
@@ -149,7 +116,7 @@ class PSQLPyResultBackend(AsyncResultBackend[_ReturnType]):
                 ),
                 parameters=[task_id],
             )
-        except RustPSQLDriverPyBaseError as exc:
+        except BaseConnectionError as exc:
             msg = f"Cannot find record with task_id = {task_id} in PostgreSQL"
             raise ResultIsMissingError(msg) from exc
 
@@ -162,7 +129,7 @@ class PSQLPyResultBackend(AsyncResultBackend[_ReturnType]):
             )
 
         taskiq_result: tp.Final = model_validate(
-            TaskiqResult[_ReturnType],
+            TaskiqResult[ReturnType],
             self.serializer.loadb(result_in_bytes),
         )
 

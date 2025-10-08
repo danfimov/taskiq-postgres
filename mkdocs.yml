@@ -39,7 +39,7 @@ theme:
 
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: blue grey
+      primary: indigo
       accent: blue
       toggle:
         icon: material/brightness-4
@@ -47,7 +47,7 @@ theme:
 
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: blue grey
+      primary: indigo
       accent: blue
       toggle:
         icon: material/brightness-7

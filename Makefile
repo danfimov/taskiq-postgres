@@ -35,8 +35,8 @@ run_infra: ## Run rabbitmq in docker for integration tests
 
 .PHONY: lint
 lint: ## Run linting
-	@uv run ruff check .
-	@uv run mypy
+	@uv run ruff check src tests
+	@uv run mypy src
 
 .PHONY: format
 format: ## Run formatting
