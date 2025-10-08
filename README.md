@@ -9,6 +9,8 @@
 
 PostgreSQL integration for Taskiq with support for asyncpg, psqlpy and aiopg drivers.
 
+See example of usage in documentation.
+
 ## Installation
 
 Depend on your preferred PostgreSQL driver, you can install this library:
@@ -65,5 +67,5 @@ Your experience with other drivers will be pretty similar. Just change the impor
 
 ## Motivation
 
-There are too many libraries for PostgreSQL and Taskiq integration. Although they have different view on interface and different functionality. 
-To address this issue I created this library with a common interface for most popular PostgreSQL drivers that handle similarity across functionality of result backends and brokers.
+There are too many libraries for PostgreSQL and Taskiq integration. Although they have different view on interface and different functionality.
+To address this issue I created this library with a common interface for most popular PostgreSQL drivers that handle similarity across functionality of result backends, brokers and schedule sources.
