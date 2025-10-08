@@ -3,47 +3,20 @@ from __future__ import annotations
 import typing as tp
 
 from aiopg import Pool, create_pool
-from taskiq import AsyncResultBackend, TaskiqResult
-from taskiq.serializers import PickleSerializer
 
 from taskiq_pg import exceptions
+from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.aiopg import queries
 
 
 if tp.TYPE_CHECKING:
-    from taskiq.abc.serializer import TaskiqSerializer
+    from taskiq import TaskiqResult
 
 
-_ReturnType = tp.TypeVar("_ReturnType")
-
-
-class AiopgResultBackend(AsyncResultBackend[_ReturnType]):
+class AiopgResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on Aiopg."""
 
-    def __init__(
-        self,
-        dsn: str | None = "postgres://postgres:postgres@localhost:5432/postgres",
-        keep_results: bool = True,
-        table_name: str = "taskiq_results",
-        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = "Uuid",
-        serializer: TaskiqSerializer | None = None,
-        **connect_kwargs: tp.Any,
-    ) -> None:
-        """
-        Construct new result backend.
-
-        :param dsn: connection string to PostgreSQL.
-        :param keep_results: flag to not remove results from Redis after reading.
-        :param connect_kwargs: additional arguments for nats `ConnectionPool` class.
-        """
-        self.dsn: tp.Final = dsn
-        self.keep_results: tp.Final = keep_results
-        self.table_name: tp.Final = table_name
-        self.field_for_task_id: tp.Final = field_for_task_id
-        self.serializer: tp.Final = serializer or PickleSerializer()
-        self.connect_kwargs: tp.Final = connect_kwargs
-
-        self._database_pool: Pool
+    _database_pool: Pool
 
     async def startup(self) -> None:
         """
@@ -82,7 +55,7 @@ class AiopgResultBackend(AsyncResultBackend[_ReturnType]):
     async def set_result(
         self,
         task_id: tp.Any,
-        result: TaskiqResult[_ReturnType],
+        result: TaskiqResult[ReturnType],
     ) -> None:
         """
         Set result to the PostgreSQL table.
@@ -133,7 +106,7 @@ class AiopgResultBackend(AsyncResultBackend[_ReturnType]):
         self,
         task_id: tp.Any,
         with_logs: bool = False,
-    ) -> TaskiqResult[_ReturnType]:
+    ) -> TaskiqResult[ReturnType]:
         """
         Retrieve result from the task.
 
@@ -167,7 +140,7 @@ class AiopgResultBackend(AsyncResultBackend[_ReturnType]):
                     (task_id,),
                 )
 
-            taskiq_result: TaskiqResult[_ReturnType] = self.serializer.loadb(
+            taskiq_result: TaskiqResult[ReturnType] = self.serializer.loadb(
                 result_in_bytes,
             )
 

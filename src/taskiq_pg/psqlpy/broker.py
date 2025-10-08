@@ -5,10 +5,11 @@ import logging
 import typing as tp
 from dataclasses import dataclass
 
-import psqlpy  # type: ignore[import-not-found]
-from psqlpy.extra_types import JSONB  # type: ignore[import-not-found]
-from taskiq import AckableMessage, AsyncBroker, AsyncResultBackend, BrokerMessage
+import psqlpy
+from psqlpy.extra_types import JSONB
+from taskiq import AckableMessage, BrokerMessage
 
+from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg.psqlpy.queries import (
     CREATE_MESSAGE_TABLE_QUERY,
     DELETE_MESSAGE_QUERY,
@@ -22,7 +23,6 @@ if tp.TYPE_CHECKING:
     from datetime import datetime
 
 
-_T = tp.TypeVar("_T")
 logger = logging.getLogger("taskiq.asyncpg_broker")
 
 
@@ -38,89 +38,22 @@ class MessageRow:
     created_at: datetime
 
 
-class PoolKwargs(tp.TypedDict, total=False):
-    """
-    Psqlpy connection kwargs.
-
-    Excludes dsn/user params because dsn used in broker.
-    """
-
-    target_session_attrs: psqlpy.TargetSessionAttrs | None
-    options: str | None
-    application_name: str | None
-    connect_timeout_sec: int | None
-    connect_timeout_nanosec: int | None
-    tcp_user_timeout_sec: int | None
-    tcp_user_timeout_nanosec: int | None
-    keepalives: bool | None
-    keepalives_idle_sec: int | None
-    keepalives_idle_nanosec: int | None
-    keepalives_interval_sec: int | None
-    keepalives_interval_nanosec: int | None
-    keepalives_retries: int | None
-    load_balance_hosts: psqlpy.LoadBalanceHosts | None
-    conn_recycling_method: psqlpy.ConnRecyclingMethod | None
-    ssl_mode: psqlpy.SslMode | None
-    ca_file: str | None
-
-
-class PSQLPyBroker(AsyncBroker):
+class PSQLPyBroker(BasePostgresBroker):
     """Broker that uses PostgreSQL and asyncpg with LISTEN/NOTIFY."""
 
-    def __init__(
-        self,
-        dsn: str = "postgresql://postgres:postgres@localhost:5432/postgres",
-        result_backend: AsyncResultBackend[_T] | None = None,
-        task_id_generator: tp.Callable[[], str] | None = None,
-        channel_name: str = "taskiq",
-        table_name: str = "taskiq_messages",
-        max_retry_attempts: int = 5,
-        read_pool_kwargs: PoolKwargs | None = None,
-        write_pool_kwargs: PoolKwargs | None = None,
-        max_write_pool_size: int = 2,
-    ) -> None:
-        """
-        Construct a new broker.
-
-        :param dsn: Connection string to PostgreSQL.
-        :param result_backend: Custom result backend.
-        :param task_id_generator: Custom task_id generator.
-        :param channel_name: Name of the channel to listen on.
-        :param table_name: Name of the table to store messages.
-        :param max_retry_attempts: Maximum number of message processing attempts.
-        :param connection_kwargs: Additional arguments for asyncpg connection.
-        :param pool_kwargs: Additional arguments for asyncpg pool creation.
-        """
-        super().__init__(
-            result_backend=result_backend,
-            task_id_generator=task_id_generator,
-        )
-
-        self.dsn: str = dsn
-        self.channel_name: str = channel_name
-        self.table_name: str = table_name
-        self.read_pool_kwargs: PoolKwargs = read_pool_kwargs if read_pool_kwargs else {}
-        self.write_pool_kwargs: PoolKwargs = (
-            write_pool_kwargs if write_pool_kwargs else {}
-        )
-        self.max_retry_attempts: int = max_retry_attempts
-        self.read_conn: psqlpy.Connection | None = None
-        self.write_pool: psqlpy.ConnectionPool | None = None
-        self.max_write_pool_size: int = max_write_pool_size
-
-        self._queue: asyncio.Queue[str] | None = None
+    read_conn: psqlpy.Connection | None = None
+    write_pool: psqlpy.ConnectionPool | None = None
 
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
         self.read_conn = await psqlpy.connect(
             dsn=self.dsn,
-            **self.read_pool_kwargs,
-        ).connection()
-        self.write_pool = psqlpy.connect(
+            **self.read_kwargs,
+        )
+        self.write_pool = psqlpy.ConnectionPool(
             dsn=self.dsn,
-            max_db_pool_size=self.max_write_pool_size,
-            **self.write_pool_kwargs,
+            **self.write_kwargs,
         )
 
         # create messages table if it doesn't exist
@@ -128,7 +61,7 @@ class PSQLPyBroker(AsyncBroker):
             _ = await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
 
         # listen to notification channel
-        listener = self.write_pool.listener()  # type: ignore[attr-defined]
+        listener = self.write_pool.listener()
         await listener.add_callback(self.channel_name, self._notification_handler)
         await listener.startup()
         listener.listen()
@@ -139,7 +72,7 @@ class PSQLPyBroker(AsyncBroker):
         """Close all connections on shutdown."""
         await super().shutdown()
         if self.read_conn is not None:
-            self.read_conn.back_to_pool()
+            self.read_conn.close()
         if self.write_pool is not None:
             self.write_pool.close()
 

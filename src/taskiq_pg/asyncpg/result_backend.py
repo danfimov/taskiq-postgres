@@ -3,10 +3,10 @@ from __future__ import annotations
 import typing as tp
 
 import asyncpg
-from taskiq import AsyncResultBackend, TaskiqResult
+from taskiq import TaskiqResult
 from taskiq.compat import model_dump, model_validate
-from taskiq.serializers import PickleSerializer
 
+from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.asyncpg.queries import (
     CREATE_INDEX_QUERY,
     CREATE_TABLE_QUERY,
@@ -15,56 +15,12 @@ from taskiq_pg.asyncpg.queries import (
     IS_RESULT_EXISTS_QUERY,
     SELECT_RESULT_QUERY,
 )
-from taskiq_pg.exceptions import ResultIsMissingError
 
 
-if tp.TYPE_CHECKING:
-    from taskiq.abc.serializer import TaskiqSerializer
-
-
-_ReturnType = tp.TypeVar("_ReturnType")
-
-
-class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
+class AsyncpgResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on asyncpg."""
 
-    def __init__(
-        self,
-        dsn: tp.Callable[[], str] | str | None = "postgres://postgres:postgres@localhost:5432/postgres",
-        keep_results: bool = True,
-        table_name: str = "taskiq_results",
-        field_for_task_id: tp.Literal["VarChar", "Text"] = "VarChar",
-        serializer: TaskiqSerializer | None = None,
-        **connect_kwargs: tp.Any,
-    ) -> None:
-        """
-        Construct new result backend.
-
-        :param dsn: connection string to PostgreSQL, or callable returning one.
-        :param keep_results: flag to not remove results from the database after reading.
-        :param table_name: name of the table to store results.
-        :param field_for_task_id: type of the field to store task_id.
-        :param serializer: serializer class to serialize/deserialize result from task.
-        :param connect_kwargs: additional arguments for asyncpg `create_pool` function.
-        """
-        self._dsn: tp.Final = dsn
-        self.keep_results: tp.Final = keep_results
-        self.table_name: tp.Final = table_name
-        self.field_for_task_id: tp.Final = field_for_task_id
-        self.connect_kwargs: tp.Final = connect_kwargs
-        self.serializer = serializer or PickleSerializer()
-        self._database_pool: asyncpg.Pool[tp.Any]
-
-    @property
-    def dsn(self) -> str | None:
-        """
-        Get the DSN string.
-
-        Returns the DSN string or None if not set.
-        """
-        if callable(self._dsn):
-            return self._dsn()
-        return self._dsn
+    _database_pool: asyncpg.Pool[tp.Any]
 
     async def startup(self) -> None:
         """
@@ -76,18 +32,15 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
             dsn=self.dsn,
             **self.connect_kwargs,
         )
-        if _database_pool is None:
-            msg = "Database pool not initialized"
-            raise RuntimeError(msg)
         self._database_pool = _database_pool
 
-        _ = await self._database_pool.execute(
+        await self._database_pool.execute(
             CREATE_TABLE_QUERY.format(
                 self.table_name,
                 self.field_for_task_id,
             ),
         )
-        _ = await self._database_pool.execute(
+        await self._database_pool.execute(
             CREATE_INDEX_QUERY.format(
                 self.table_name,
                 self.table_name,
@@ -102,7 +55,7 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
     async def set_result(
         self,
         task_id: str,
-        result: TaskiqResult[_ReturnType],
+        result: TaskiqResult[ReturnType],
     ) -> None:
         """
         Set result to the PostgreSQL table.
@@ -139,7 +92,7 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
         self,
         task_id: str,
         with_logs: bool = False,
-    ) -> TaskiqResult[_ReturnType]:
+    ) -> TaskiqResult[ReturnType]:
         """
         Retrieve result from the task.
 
@@ -157,9 +110,6 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
                 task_id,
             ),
         )
-        if result_in_bytes is None:
-            msg = f"Cannot find record with task_id = {task_id} in PostgreSQL"
-            raise ResultIsMissingError(msg)
         if not self.keep_results:
             _ = await self._database_pool.execute(
                 DELETE_RESULT_QUERY.format(
@@ -168,7 +118,7 @@ class AsyncpgResultBackend(AsyncResultBackend[_ReturnType]):
                 task_id,
             )
         taskiq_result: tp.Final = model_validate(
-            TaskiqResult[_ReturnType],
+            TaskiqResult[ReturnType],
             self.serializer.loadb(result_in_bytes),
         )
         if not with_logs:
