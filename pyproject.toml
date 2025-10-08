@@ -1,7 +1,8 @@
 [project]
 name = "taskiq-postgres"
-version = "0.0.0"
+version = "0.2.0"
 description = "PostgreSQL integration for taskiq"
+summary = "PostgreSQL integration for taskiq"
 readme = "README.md"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -29,9 +30,8 @@ keywords = ["taskiq", "tasks", "distributed", "async", "postgresql"]
 authors = [
     {name = "Anfimov Dima", email = "lovesolaristics@gmail.com"}
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.14"
 dependencies = [
-    "aiopg>=1.4.0",
     "taskiq>=0.11.17",
 ]
 
@@ -49,14 +49,24 @@ asyncpg = [
 psqlpy = [
     "psqlpy>=0.10.1",
 ]
+
 [dependency-groups]
 dev = [
-    "ruff>=0.11.9",
-    "pytest>=8.3.5",
-    "pytest-asyncio>=0.26.0",
-    "mypy>=1.15.0",
-    "asyncpg-stubs>=0.30.1",
+    "ruff>=0.14.0",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.1.0",
+    "mypy>=1.18.1",
+    "asyncpg-stubs>=0.30.2",
+    "mkdocs-material>=9.6.21",
+    "prek>=0.2.4",
 ]
+
+[build-system]
+requires = ["uv_build>=0.8.14,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "taskiq_pg"
 
 [tool.pytest.ini_options]
 pythonpath = [
@@ -120,8 +130,16 @@ known-local-folder = ["taskiq_pg"]
 lines-after-imports = 2
 
 [tool.mypy]
-check_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_defs = true
+python_version = "3.12"
+modules = "taskiq_pg"
+exclude_gitignore = true
+platform = "linux"
+follow_imports = "normal"
 ignore_missing_imports = false
-no_implicit_optional = true
+mypy_path = "stubs"
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unreachable = true
+warn_no_return = true
+warn_unused_ignores = true
+warn_redundant_casts = true
