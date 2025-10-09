@@ -131,7 +131,7 @@ class AsyncpgBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
-        if self.read_conn is None:
+        if self.write_pool is None:
             msg = "Call startup before starting listening."
             raise ValueError(msg)
         if self._queue is None:
