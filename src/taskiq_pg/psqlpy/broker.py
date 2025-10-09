@@ -6,15 +6,16 @@ import typing as tp
 from dataclasses import dataclass
 
 import psqlpy
+from psqlpy.exceptions import ConnectionExecuteError
 from psqlpy.extra_types import JSONB
 from taskiq import AckableMessage, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg.psqlpy.queries import (
+    CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
-    SELECT_MESSAGE_QUERY,
 )
 
 
@@ -35,6 +36,7 @@ class MessageRow:
     task_name: str
     message: str
     labels: JSONB
+    status: str
     created_at: datetime
 
 
@@ -165,14 +167,17 @@ class PSQLPyBroker(BasePostgresBroker):
             try:
                 payload = await self._queue.get()
                 message_id = int(payload)  # payload is the message id
-                message_row = await self.read_conn.fetch_row(
-                    SELECT_MESSAGE_QUERY.format(self.table_name),
-                    [message_id],
-                )
-                # ugly type hacks b/c SingleQueryResult.as_class return type is wrong
+                try:
+                    async with self.write_pool.acquire() as conn:
+                        claimed_message = await conn.fetch_row(
+                            CLAIM_MESSAGE_QUERY.format(self.table_name),
+                            [message_id],
+                        )
+                except ConnectionExecuteError:  # message was claimed by another worker
+                    continue
                 message_row_result = tp.cast(
                     "MessageRow",
-                    tp.cast("object", message_row.as_class(MessageRow)),
+                    tp.cast("object", claimed_message.as_class(MessageRow)),
                 )
                 message_data = message_row_result.message.encode()
 

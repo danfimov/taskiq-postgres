@@ -143,9 +143,18 @@ ignore = [
 
     "S101",  # assert usage
     "S311",  # pseudo-random generators are not suitable for cryptographic purposes
+    "S608",
+
+    "RUF",
 ]
 "tests/test_linting.py" = [
     "S603",  # subprocess usage
+]
+"examples/*" = [
+    "T201",
+    "D",
+    "ANN",
+    "INP001",
 ]
 
 [tool.ruff.lint.isort]
