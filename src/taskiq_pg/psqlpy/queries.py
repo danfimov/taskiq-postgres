@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS {} (
     task_name VARCHAR NOT NULL,
     message TEXT NOT NULL,
     labels JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 """
@@ -47,6 +48,6 @@ VALUES ($1, $2, $3, $4)
 RETURNING id
 """
 
-SELECT_MESSAGE_QUERY = "SELECT * FROM {} WHERE id = $1"
+CLAIM_MESSAGE_QUERY = "UPDATE {} SET status = 'processing' WHERE id = $1 AND status = 'pending' RETURNING *"
 
 DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = $1"

@@ -10,10 +10,10 @@ from taskiq import AckableMessage, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg.asyncpg.queries import (
+    CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
-    SELECT_MESSAGE_QUERY,
 )
 
 
@@ -142,20 +142,14 @@ class AsyncpgBroker(BasePostgresBroker):
             try:
                 payload = await self._queue.get()
                 message_id = int(payload)
-                message_row = await self.read_conn.fetchrow(
-                    SELECT_MESSAGE_QUERY.format(self.table_name),
-                    message_id,
-                )
-                if message_row is None:
-                    logger.warning(
-                        "Message with id %s not found in database.",
+                async with self.write_pool.acquire() as conn:
+                    claimed = await conn.fetchrow(
+                        CLAIM_MESSAGE_QUERY.format(self.table_name),
                         message_id,
                     )
+                if claimed is None:
                     continue
-                if message_row.get("message") is None:
-                    msg = "Message row does not have 'message' column"
-                    raise ValueError(msg)
-                message_str = message_row["message"]
+                message_str = claimed["message"]
                 if not isinstance(message_str, str):
                     msg = "message is not a string"
                     raise TypeError(msg)
