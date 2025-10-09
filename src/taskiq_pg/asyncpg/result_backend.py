@@ -111,7 +111,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
             ),
         )
         if not self.keep_results:
-            _ = await self._database_pool.execute(
+            await self._database_pool.execute(
                 DELETE_RESULT_QUERY.format(
                     self.table_name,
                 ),

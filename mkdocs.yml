@@ -9,9 +9,8 @@ nav:
   - Overview:
       - index.md
   - Tutorial:
-      - tutorial/quickstart.md
-      - tutorial/broker.md
       - tutorial/schedule_source.md
+      - tutorial/common_issues.md
   - API:
       - reference.md
   - Contributing:
