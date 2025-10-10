@@ -1,13 +1,12 @@
-import json
 import uuid
 from logging import getLogger
 
-import asyncpg
+from psqlpy import ConnectionPool
 from pydantic import ValidationError
 from taskiq import ScheduledTask
 
 from taskiq_pg._internal import BasePostgresScheduleSource
-from taskiq_pg.asyncpg.queries import (
+from taskiq_pg.psqlpy.queries import (
     CREATE_SCHEDULES_TABLE_QUERY,
     DELETE_ALL_SCHEDULES_QUERY,
     INSERT_SCHEDULE_QUERY,
@@ -15,27 +14,32 @@ from taskiq_pg.asyncpg.queries import (
 )
 
 
-logger = getLogger("taskiq_pg.asyncpg_schedule_source")
+logger = getLogger("taskiq_pg.psqlpy_schedule_source")
 
 
-class AsyncpgScheduleSource(BasePostgresScheduleSource):
-    """Schedule source that uses asyncpg to store schedules in PostgreSQL."""
+class PSQLPyScheduleSource(BasePostgresScheduleSource):
+    """Schedule source that uses psqlpy to store schedules in PostgreSQL."""
 
-    _database_pool: "asyncpg.Pool[asyncpg.Record]"
+    _database_pool: ConnectionPool
 
     async def _update_schedules_on_startup(self, schedules: list[ScheduledTask]) -> None:
         """Update schedules in the database on startup: truncate table and insert new ones."""
         async with self._database_pool.acquire() as connection, connection.transaction():
             await connection.execute(DELETE_ALL_SCHEDULES_QUERY.format(self._table_name))
-            for schedule in schedules:
-                await self._database_pool.execute(
-                    INSERT_SCHEDULE_QUERY.format(self._table_name),
-                    str(schedule.schedule_id),
+            data_to_insert: list = [
+                [
+                    uuid.UUID(schedule.schedule_id),
                     schedule.task_name,
-                    schedule.model_dump_json(
+                    schedule.model_dump(
                         exclude={"schedule_id", "task_name"},
                     ),
-                )
+                ]
+                for schedule in schedules
+            ]
+            await connection.execute_many(
+                INSERT_SCHEDULE_QUERY.format(self._table_name),
+                data_to_insert,
+            )
 
     def _get_schedules_from_broker_tasks(self) -> list[ScheduledTask]:
         """Extract schedules from the broker's registered tasks."""
@@ -80,32 +84,33 @@ class AsyncpgScheduleSource(BasePostgresScheduleSource):
         Construct new connection pool, create new table for schedules if not exists
         and fill table with schedules from task labels.
         """
-        self._database_pool = await asyncpg.create_pool(
+        self._database_pool = ConnectionPool(
             dsn=self.dsn,
             **self._connect_kwargs,
         )
-        await self._database_pool.execute(
-            CREATE_SCHEDULES_TABLE_QUERY.format(
-                self._table_name,
-            ),
-        )
+        async with self._database_pool.acquire() as connection:
+            await connection.execute(
+                CREATE_SCHEDULES_TABLE_QUERY.format(
+                    self._table_name,
+                ),
+            )
         scheduled_tasks_for_creation = self._get_schedules_from_broker_tasks()
         await self._update_schedules_on_startup(scheduled_tasks_for_creation)
 
     async def shutdown(self) -> None:
         """Close the connection pool."""
         if getattr(self, "_database_pool", None) is not None:
-            await self._database_pool.close()
+            self._database_pool.close()
 
     async def get_schedules(self) -> list["ScheduledTask"]:
         """Fetch schedules from the database."""
-        async with self._database_pool.acquire() as conn:
-            rows_with_schedules = await conn.fetch(
+        async with self._database_pool.acquire() as connection:
+            rows_with_schedules = await connection.fetch(
                 SELECT_SCHEDULES_QUERY.format(self._table_name),
             )
         schedules = []
-        for row in rows_with_schedules:
-            schedule = json.loads(row["schedule"])
+        for row in rows_with_schedules.result():
+            schedule = row["schedule"]
             schedules.append(
                 ScheduledTask.model_validate(
                     {
