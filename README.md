@@ -7,9 +7,18 @@
 <hr/>
 </div>
 
-PostgreSQL integration for Taskiq with support for asyncpg, psqlpy and aiopg drivers.
+PostgreSQL integration for Taskiq with support for asyncpg, psqlpy, psycopg and aiopg drivers.
 
-See more example of usage in [the documentation](https://danfimov.github.io/taskiq-postgres/) or [examples directory](https://github.com/danfimov/taskiq-postgres/examples).
+## Features
+
+- **PostgreSQL Broker** - high-performance message broker using PostgreSQL LISTEN/NOTIFY;
+- **Result Backend** - persistent task result storage with configurable retention;
+- **Scheduler Source** - cron-like task scheduling with PostgreSQL persistence;
+- **Multiple Drivers** - support for asyncpg, psycopg3, psqlpy and aiopg;
+- **Flexible Configuration** - customizable table names, field types, and connection options;
+- **Multiple Serializers** - support for different serialization methods (Pickle, JSON, etc.).
+
+See usage guide in [documentation](https://danfimov.github.io/taskiq-postgres/) or explore examples in [separate directory](https://github.com/danfimov/taskiq-postgres/examples).
 
 ## Installation
 
@@ -21,6 +30,9 @@ pip install taskiq-postgres[asyncpg]
 
 # with psqlpy
 pip install taskiq-postgres[psqlpy]
+
+# with psycopg3
+pip install taskiq-postgres[psycopg]
 
 # with aiopg
 pip install taskiq-postgres[aiopg]
@@ -101,7 +113,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
       schedule=[
           {
               "cron": "*/1 * * * *",  # type: str, either cron or time should be specified.
-              "cron_offset": None,  # type: str | timedelta | None, can be omitted.
+              "cron_offset": None,  # type: str | None, can be omitted. For example "Europe/Berlin".
               "time": None,  # type: datetime | None, either cron or time should be specified.
               "args": [], # type list[Any] | None, can be omitted.
               "kwargs": {}, # type: dict[str, Any] | None, can be omitted.

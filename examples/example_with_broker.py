@@ -2,7 +2,7 @@
 How to run:
 
     1) Run worker in one terminal:
-        uv run taskiq worker examples.example_with_broker:broker
+        uv run taskiq worker examples.example_with_broker:broker --workers 1
 
     2) Run this script in another terminal:
         uv run python -m examples.example_with_broker
@@ -10,11 +10,11 @@ How to run:
 
 import asyncio
 
-from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgResultBackend
+from taskiq_pg.psycopg import PsycopgBroker, PsycopgResultBackend
 
 
 dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
-broker = AsyncpgBroker(dsn).with_result_backend(AsyncpgResultBackend(dsn))
+broker = PsycopgBroker(dsn).with_result_backend(PsycopgResultBackend(dsn))
 
 
 @broker.task("solve_all_problems")

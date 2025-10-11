@@ -2,7 +2,7 @@
 How to run:
 
     1) Run worker in one terminal:
-        uv run taskiq worker examples.example_with_schedule_source:broker
+        uv run taskiq worker examples.example_with_schedule_source:broker --workers 1
 
     2) Run scheduler in another terminal:
         uv run taskiq scheduler examples.example_with_schedule_source:scheduler
@@ -12,15 +12,15 @@ import asyncio
 
 from taskiq import TaskiqScheduler
 
-from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgScheduleSource
+from taskiq_pg.psycopg import PsycopgBroker, PsycopgScheduleSource
 
 
 dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
-broker = AsyncpgBroker(dsn)
+broker = PsycopgBroker(dsn)
 scheduler = TaskiqScheduler(
     broker=broker,
     sources=[
-        AsyncpgScheduleSource(
+        PsycopgScheduleSource(
             dsn=dsn,
             broker=broker,
         ),

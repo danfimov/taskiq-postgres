@@ -11,7 +11,7 @@ title: Overview
 <hr/>
 </div>
 
-PostgreSQL integration for Taskiq with support for asyncpg, psqlpy and aiopg drivers.
+PostgreSQL integration for Taskiq with support for asyncpg, psqlpy, psycopg and aiopg drivers.
 
 ## Motivation
 
@@ -21,7 +21,6 @@ To address this issue I created this library with a common interface for most po
 - result backends;
 - brokers;
 - schedule sources.
-
 
 ## Installation
 
@@ -37,6 +36,12 @@ Depending on your preferred PostgreSQL driver, you can install this library with
 
     ```bash
     pip install taskiq-postgres[psqlpy]
+    ```
+
+=== "psycopg"
+
+    ```bash
+    pip install taskiq-postgres[psycopg]
     ```
 
 === "aiopg"
@@ -91,6 +96,36 @@ Depending on your preferred PostgreSQL driver, you can install this library with
 
         dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
         broker = PSQLPyBroker(dsn).with_result_backend(PSQLPyResultBackend(dsn))
+
+
+        @broker.task("solve_all_problems")
+        async def best_task_ever() -> None:
+            """Solve all problems in the world."""
+            await asyncio.sleep(2)
+            print("All problems are solved!")
+
+
+        async def main():
+            await broker.startup()
+            task = await best_task_ever.kiq()
+            print(await task.wait_result())
+            await broker.shutdown()
+
+
+        if __name__ == "__main__":
+            asyncio.run(main())
+        ```
+
+    === "psycopg"
+
+        ```python
+        # broker_example.py
+        import asyncio
+        from taskiq_pg.psycopg import PsycopgBroker, PsycopgResultBackend
+
+
+        dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
+        broker = PsycopgBroker(dsn).with_result_backend(PsycopgResultBackend(dsn))
 
 
         @broker.task("solve_all_problems")
@@ -184,7 +219,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
             schedule=[
                 {
                     "cron": "*/1 * * * *",  # type: str, either cron or time should be specified.
-                    "cron_offset": None,  # type: str | timedelta | None, can be omitted.
+                    "cron_offset": None,  # type: str | None, can be omitted.
                     "time": None,  # type: datetime | None, either cron or time should be specified.
                     "args": [], # type list[Any] | None, can be omitted.
                     "kwargs": {}, # type: dict[str, Any] | None, can be omitted.
@@ -223,7 +258,47 @@ Your experience with other drivers will be pretty similar. Just change the impor
             schedule=[
                 {
                     "cron": "*/1 * * * *",  # type: str, either cron or time should be specified.
-                    "cron_offset": None,  # type: str | timedelta | None, can be omitted.
+                    "cron_offset": None,  # type: str | None, can be omitted.
+                    "time": None,  # type: datetime | None, either cron or time should be specified.
+                    "args": [], # type list[Any] | None, can be omitted.
+                    "kwargs": {}, # type: dict[str, Any] | None, can be omitted.
+                    "labels": {}, # type: dict[str, Any] | None, can be omitted.
+                },
+            ],
+        )
+        async def best_task_ever() -> None:
+            """Solve all problems in the world."""
+            await asyncio.sleep(2)
+            print("All problems are solved!")
+
+        ```
+
+    === "psycopg"
+
+        ```python
+        # scheduler_example.py
+        import asyncio
+        from taskiq import TaskiqScheduler
+        from taskiq_pg.psycopg import PsycopgBroker, PsycopgScheduleSource
+
+
+        dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
+        broker = PsycopgBroker(dsn)
+        scheduler = TaskiqScheduler(
+            broker=broker,
+            sources=[PsycopgScheduleSource(
+                dsn=dsn,
+                broker=broker,
+            )],
+        )
+
+
+        @broker.task(
+            task_name="solve_all_problems",
+            schedule=[
+                {
+                    "cron": "*/1 * * * *",  # type: str, either cron or time should be specified.
+                    "cron_offset": None,  # type: str | None, can be omitted.
                     "time": None,  # type: datetime | None, either cron or time should be specified.
                     "args": [], # type list[Any] | None, can be omitted.
                     "kwargs": {}, # type: dict[str, Any] | None, can be omitted.
@@ -263,7 +338,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
             schedule=[
                 {
                     "cron": "*/1 * * * *",  # type: str, either cron or time should be specified.
-                    "cron_offset": None,  # type: str | timedelta | None, can be omitted.
+                    "cron_offset": None,  # type: str | None, can be omitted.
                     "time": None,  # type: datetime | None, either cron or time should be specified.
                     "args": [], # type list[Any] | None, can be omitted.
                     "kwargs": {}, # type: dict[str, Any] | None, can be omitted.
