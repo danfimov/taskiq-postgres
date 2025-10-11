@@ -48,6 +48,9 @@ asyncpg = [
 psqlpy = [
     "psqlpy>=0.11.6",
 ]
+psycopg = [
+    "psycopg[binary,pool]>=3.2.10",
+]
 
 [dependency-groups]
 dev = [
@@ -60,6 +63,8 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=7.0.0",
+    # for database in tests
+    "sqlalchemy-utils>=0.42.0",
     # pre-commit hooks
     "prek>=0.2.4",
     # docs
@@ -149,6 +154,7 @@ ignore = [
     "RUF",
 
     "PLR2004",  # magic numbers in tests
+    "ANN",  # missing type annotations in tests
 ]
 "tests/test_linting.py" = [
     "S603",  # subprocess usage

@@ -6,9 +6,10 @@ import uuid
 import asyncpg
 import pytest
 
-from taskiq_pg.aiopg.result_backend import AiopgResultBackend
-from taskiq_pg.asyncpg.result_backend import AsyncpgResultBackend
-from taskiq_pg.psqlpy.result_backend import PSQLPyResultBackend
+from taskiq_pg.aiopg import AiopgResultBackend
+from taskiq_pg.asyncpg import AsyncpgResultBackend
+from taskiq_pg.psqlpy import PSQLPyResultBackend
+from taskiq_pg.psycopg import PsycopgResultBackend
 
 
 @pytest.mark.integration
@@ -18,6 +19,7 @@ from taskiq_pg.psqlpy.result_backend import PSQLPyResultBackend
         AsyncpgResultBackend,
         AiopgResultBackend,
         PSQLPyResultBackend,
+        PsycopgResultBackend,
     ],
 )
 @pytest.mark.parametrize(
@@ -30,7 +32,7 @@ from taskiq_pg.psqlpy.result_backend import PSQLPyResultBackend
 )
 async def test_when_startup_called__then_table_is_created(
     pg_dsn: str,
-    result_backend_class: type[AsyncpgResultBackend | AiopgResultBackend | PSQLPyResultBackend],
+    result_backend_class: type[AsyncpgResultBackend | AiopgResultBackend | PSQLPyResultBackend | PsycopgResultBackend],
     field_type: tp.Literal["VarChar", "Text", "Uuid"],
     expected_pg_type: str,
 ) -> None:

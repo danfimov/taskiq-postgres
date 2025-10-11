@@ -1,13 +1,12 @@
 import uuid
 from logging import getLogger
 
-from psqlpy import ConnectionPool
-from psqlpy.extra_types import JSONB
+from psycopg_pool import AsyncConnectionPool
 from pydantic import ValidationError
 from taskiq import ScheduledTask
 
 from taskiq_pg._internal import BasePostgresScheduleSource
-from taskiq_pg.psqlpy.queries import (
+from taskiq_pg.psycopg.queries import (
     CREATE_SCHEDULES_TABLE_QUERY,
     DELETE_ALL_SCHEDULES_QUERY,
     INSERT_SCHEDULE_QUERY,
@@ -15,33 +14,29 @@ from taskiq_pg.psqlpy.queries import (
 )
 
 
-logger = getLogger("taskiq_pg.psqlpy_schedule_source")
+logger = getLogger("taskiq_pg.psycopg_schedule_source")
 
 
-class PSQLPyScheduleSource(BasePostgresScheduleSource):
-    """Schedule source that uses psqlpy to store schedules in PostgreSQL."""
+class PsycopgScheduleSource(BasePostgresScheduleSource):
+    """Schedule source that uses psycopg to store schedules in PostgreSQL."""
 
-    _database_pool: ConnectionPool
+    _database_pool: AsyncConnectionPool
 
     async def _update_schedules_on_startup(self, schedules: list[ScheduledTask]) -> None:
         """Update schedules in the database on startup: truncate table and insert new ones."""
-        async with self._database_pool.acquire() as connection, connection.transaction():
-            await connection.execute(DELETE_ALL_SCHEDULES_QUERY.format(self._table_name))
-            data_to_insert: list = []
-            for schedule in schedules:
-                schedule_dict = schedule.model_dump(
-                    mode="json",
-                    exclude={"schedule_id", "task_name"},
-                )
-                data_to_insert.append(
-                    [
-                        uuid.UUID(schedule.schedule_id),
-                        schedule.task_name,
-                        JSONB(schedule_dict),
-                    ]
-                )
-
-            await connection.execute_many(
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute(DELETE_ALL_SCHEDULES_QUERY.format(self._table_name))
+            data_to_insert: list = [
+                [
+                    uuid.UUID(schedule.schedule_id),
+                    schedule.task_name,
+                    schedule.model_dump_json(
+                        exclude={"schedule_id", "task_name"},
+                    ),
+                ]
+                for schedule in schedules
+            ]
+            await cursor.executemany(
                 INSERT_SCHEDULE_QUERY.format(self._table_name),
                 data_to_insert,
             )
@@ -89,15 +84,16 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
         Construct new connection pool, create new table for schedules if not exists
         and fill table with schedules from task labels.
         """
-        self._database_pool = ConnectionPool(
-            dsn=self.dsn,
+        self._database_pool = AsyncConnectionPool(
+            conninfo=self.dsn if self.dsn is not None else "",
+            open=False,
             **self._connect_kwargs,
         )
-        async with self._database_pool.acquire() as connection:
-            await connection.execute(
-                CREATE_SCHEDULES_TABLE_QUERY.format(
-                    self._table_name,
-                ),
+        await self._database_pool.open()
+
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                CREATE_SCHEDULES_TABLE_QUERY.format(self._table_name),
             )
         scheduled_tasks_for_creation = self._get_schedules_from_broker_tasks()
         await self._update_schedules_on_startup(scheduled_tasks_for_creation)
@@ -105,29 +101,29 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
     async def shutdown(self) -> None:
         """Close the connection pool."""
         if getattr(self, "_database_pool", None) is not None:
-            self._database_pool.close()
+            await self._database_pool.close()
 
     async def get_schedules(self) -> list["ScheduledTask"]:
         """Fetch schedules from the database."""
-        async with self._database_pool.acquire() as connection:
-            rows_with_schedules = await connection.fetch(
+        schedules = []
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            rows_with_schedules = await cursor.execute(
                 SELECT_SCHEDULES_QUERY.format(self._table_name),
             )
-        schedules = []
-        for row in rows_with_schedules.result():
-            schedule = row["schedule"]
-            schedules.append(
-                ScheduledTask.model_validate(
-                    {
-                        "schedule_id": str(row["id"]),
-                        "task_name": row["task_name"],
-                        "labels": schedule["labels"],
-                        "args": schedule["args"],
-                        "kwargs": schedule["kwargs"],
-                        "cron": schedule["cron"],
-                        "cron_offset": schedule["cron_offset"],
-                        "time": schedule["time"],
-                    },
-                ),
-            )
+            rows = await rows_with_schedules.fetchall()
+            for schedule_id, task_name, schedule in rows:
+                schedules.append(
+                    ScheduledTask.model_validate(
+                        {
+                            "schedule_id": str(schedule_id),
+                            "task_name": task_name,
+                            "labels": schedule["labels"],
+                            "args": schedule["args"],
+                            "kwargs": schedule["kwargs"],
+                            "cron": schedule["cron"],
+                            "cron_offset": schedule["cron_offset"],
+                            "time": schedule["time"],
+                        },
+                    ),
+                )
         return schedules

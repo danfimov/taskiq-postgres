@@ -27,33 +27,34 @@ logger = logging.getLogger("taskiq.asyncpg_broker")
 class AsyncpgBroker(BasePostgresBroker):
     """Broker that uses asyncpg as driver and PostgreSQL with LISTEN/NOTIFY mechanism."""
 
-    read_conn: asyncpg.Connection[asyncpg.Record] | None = None
-    write_pool: asyncpg.pool.Pool[asyncpg.Record] | None = None
+    _read_conn: asyncpg.Connection[asyncpg.Record] | None = None
+    _write_pool: asyncpg.pool.Pool[asyncpg.Record] | None = None
 
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
 
-        self.read_conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
-        self.write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
+        self._read_conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
+        self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
 
-        if self.read_conn is None:
-            msg = "read_conn not initialized"
+        if self._read_conn is None:
+            msg = "_read_conn not initialized"
             raise RuntimeError(msg)
 
-        async with self.write_pool.acquire() as conn:
-            _ = await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+        async with self._write_pool.acquire() as conn:
+            await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
 
-        await self.read_conn.add_listener(self.channel_name, self._notification_handler)
+        await self._read_conn.add_listener(self.channel_name, self._notification_handler)
         self._queue = asyncio.Queue()
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
         await super().shutdown()
-        if self.read_conn is not None:
-            await self.read_conn.close()
-        if self.write_pool is not None:
-            await self.write_pool.close()
+        if self._read_conn is not None:
+            await self._read_conn.remove_listener(self.channel_name, self._notification_handler)
+            await self._read_conn.close()
+        if self._write_pool is not None:
+            await self._write_pool.close()
 
     def _notification_handler(
         self,
@@ -85,11 +86,11 @@ class AsyncpgBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
-        if self.write_pool is None:
+        if self._write_pool is None:
             msg = "Please run startup before kicking."
             raise ValueError(msg)
 
-        async with self.write_pool.acquire() as conn:
+        async with self._write_pool.acquire() as conn:
             # Insert the message into the database
             message_inserted_id = tp.cast(
                 "int",
@@ -117,9 +118,9 @@ class AsyncpgBroker(BasePostgresBroker):
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
         await asyncio.sleep(delay_seconds)
-        if self.write_pool is None:
+        if self._write_pool is None:
             return
-        async with self.write_pool.acquire() as conn:
+        async with self._write_pool.acquire() as conn:
             # Send NOTIFY
             _ = await conn.execute(f"NOTIFY {self.channel_name}, '{message_id}'")
 
@@ -131,7 +132,7 @@ class AsyncpgBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
-        if self.write_pool is None:
+        if self._write_pool is None:
             msg = "Call startup before starting listening."
             raise ValueError(msg)
         if self._queue is None:
@@ -142,7 +143,7 @@ class AsyncpgBroker(BasePostgresBroker):
             try:
                 payload = await self._queue.get()
                 message_id = int(payload)
-                async with self.write_pool.acquire() as conn:
+                async with self._write_pool.acquire() as conn:
                     claimed = await conn.fetchrow(
                         CLAIM_MESSAGE_QUERY.format(self.table_name),
                         message_id,
@@ -156,11 +157,11 @@ class AsyncpgBroker(BasePostgresBroker):
                 message_data = message_str.encode()
 
                 async def ack(*, _message_id: int = message_id) -> None:
-                    if self.write_pool is None:
+                    if self._write_pool is None:
                         msg = "Call startup before starting listening."
                         raise ValueError(msg)
 
-                    async with self.write_pool.acquire() as conn:
+                    async with self._write_pool.acquire() as conn:
                         _ = await conn.execute(
                             DELETE_MESSAGE_QUERY.format(self.table_name),
                             _message_id,

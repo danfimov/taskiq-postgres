@@ -24,7 +24,7 @@ if tp.TYPE_CHECKING:
     from datetime import datetime
 
 
-logger = logging.getLogger("taskiq.asyncpg_broker")
+logger = logging.getLogger("taskiq.psqlpy_broker")
 
 
 @dataclass
@@ -41,42 +41,47 @@ class MessageRow:
 
 
 class PSQLPyBroker(BasePostgresBroker):
-    """Broker that uses PostgreSQL and asyncpg with LISTEN/NOTIFY."""
+    """Broker that uses PostgreSQL and PSQLPy with LISTEN/NOTIFY."""
 
-    read_conn: psqlpy.Connection | None = None
-    write_pool: psqlpy.ConnectionPool | None = None
+    _read_conn: psqlpy.Connection
+    _write_pool: psqlpy.ConnectionPool
+    _listener: psqlpy.Listener
+    _queue: asyncio.Queue
 
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
-        self.read_conn = await psqlpy.connect(
+        self._read_conn = await psqlpy.connect(
             dsn=self.dsn,
             **self.read_kwargs,
         )
-        self.write_pool = psqlpy.ConnectionPool(
+        self._write_pool = psqlpy.ConnectionPool(
             dsn=self.dsn,
             **self.write_kwargs,
         )
 
         # create messages table if it doesn't exist
-        async with self.write_pool.acquire() as conn:
-            _ = await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+        async with self._write_pool.acquire() as conn:
+            await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
 
         # listen to notification channel
-        listener = self.write_pool.listener()
-        await listener.add_callback(self.channel_name, self._notification_handler)
-        await listener.startup()
-        listener.listen()
+        self._listener = self._write_pool.listener()
+        await self._listener.add_callback(self.channel_name, self._notification_handler)
+        await self._listener.startup()
+        self._listener.listen()
 
         self._queue = asyncio.Queue()
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
         await super().shutdown()
-        if self.read_conn is not None:
-            self.read_conn.close()
-        if self.write_pool is not None:
-            self.write_pool.close()
+        if self._read_conn is not None:
+            self._read_conn.close()
+        if self._write_pool is not None:
+            self._write_pool.close()
+        if self._listener is not None:
+            self._listener.abort_listen()
+            await self._listener.shutdown()
 
     async def _notification_handler(
         self,
@@ -88,12 +93,7 @@ class PSQLPyBroker(BasePostgresBroker):
         """
         Handle NOTIFY messages.
 
-        From asyncpg.connection.add_listener docstring:
-            A callable or a coroutine function receiving the following arguments:
-            **connection**: a Connection the callback is registered with;
-            **pid**: PID of the Postgres server that sent the notification;
-            **channel**: name of the channel the notification was sent to;
-            **payload**: the payload.
+        https://psqlpy-python.github.io/components/listener.html#usage
         """
         logger.debug("Received notification on channel %s: %s", channel, payload)
         if self._queue is not None:
@@ -107,11 +107,7 @@ class PSQLPyBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
-        if self.write_pool is None:
-            msg = "Please run startup before kicking."
-            raise ValueError(msg)
-
-        async with self.write_pool.acquire() as conn:
+        async with self._write_pool.acquire() as conn:
             # insert message into db table
             message_inserted_id = tp.cast(
                 "int",
@@ -129,7 +125,7 @@ class PSQLPyBroker(BasePostgresBroker):
             delay_value = tp.cast("str | None", message.labels.get("delay"))
             if delay_value is not None:
                 delay_seconds = int(delay_value)
-                _ = asyncio.create_task(  # noqa: RUF006
+                asyncio.create_task(  # noqa: RUF006
                     self._schedule_notification(message_inserted_id, delay_seconds),
                 )
             else:
@@ -141,10 +137,7 @@ class PSQLPyBroker(BasePostgresBroker):
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
         await asyncio.sleep(delay_seconds)
-        if self.write_pool is None:
-            msg = "Call startup before starting listening."
-            raise ValueError(msg)
-        async with self.write_pool.acquire() as conn:
+        async with self._write_pool.acquire() as conn:
             # Send NOTIFY with message ID as payload
             _ = await conn.execute(f"NOTIFY {self.channel_name}, '{message_id}'")
 
@@ -156,19 +149,12 @@ class PSQLPyBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
-        if self.write_pool is None:
-            msg = "Call startup before starting listening."
-            raise ValueError(msg)
-        if self._queue is None:
-            msg = "Startup did not initialize the queue."
-            raise ValueError(msg)
-
         while True:
             try:
                 payload = await self._queue.get()
                 message_id = int(payload)  # payload is the message id
                 try:
-                    async with self.write_pool.acquire() as conn:
+                    async with self._write_pool.acquire() as conn:
                         claimed_message = await conn.fetch_row(
                             CLAIM_MESSAGE_QUERY.format(self.table_name),
                             [message_id],
@@ -182,11 +168,7 @@ class PSQLPyBroker(BasePostgresBroker):
                 message_data = message_row_result.message.encode()
 
                 async def ack(*, _message_id: int = message_id) -> None:
-                    if self.write_pool is None:
-                        msg = "Call startup before starting listening"
-                        raise ValueError(msg)
-
-                    async with self.write_pool.acquire() as conn:
+                    async with self._write_pool.acquire() as conn:
                         _ = await conn.execute(
                             DELETE_MESSAGE_QUERY.format(self.table_name),
                             [_message_id],
