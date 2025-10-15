@@ -7,7 +7,7 @@ title: Common Issues
 Ensure your connection string is correct:
 
   ```python
-  dsn = "postgresql://username:password@host:port/database"
+  dsn = "postgresql://postgres:postgres@localhost:5432/postgres"
   ```
 
 Check PostgreSQL is running and accessible:
