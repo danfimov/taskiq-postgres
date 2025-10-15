@@ -1,6 +1,6 @@
 [project]
 name = "taskiq-postgres"
-version = "0.2.0"
+version = "0.6.0"
 description = "PostgreSQL integration for taskiq"
 summary = "PostgreSQL integration for taskiq"
 readme = "README.md"
@@ -29,7 +29,7 @@ keywords = ["taskiq", "tasks", "distributed", "async", "postgresql"]
 authors = [
     {name = "Anfimov Dima", email = "lovesolaristics@gmail.com"}
 ]
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10,<3.15"
 dependencies = [
     "taskiq>=0.11.18",
 ]
@@ -54,21 +54,31 @@ psycopg = [
 
 [dependency-groups]
 dev = [
-    # linting and formating
+    {include-group = "lint"},
+    {include-group = "test"},
+    {include-group = "docs"},
+    "prek>=0.2.8",
+]
+lint = [
     "ruff>=0.14.0",
+    "bandit>=1.8.6",
+    "codespell>=2.4.1",
+    "zizmor>=1.15.2",
     # type check
     "mypy>=1.18.1",
     "asyncpg-stubs>=0.30.2",
-    # tests
+]
+test = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=7.0.0",
     # for database in tests
     "sqlalchemy-utils>=0.42.0",
-    # pre-commit hooks
-    "prek>=0.2.4",
-    # docs
-    "mkdocs-material>=9.6.21",
+    # for faster asyncio loop in tests
+    "uvloop>=0.21.0",
+]
+docs = [
+    "mkdocs-material>=9.6.22",
     "mkdocstrings-python>=1.18.2",
 ]
 
@@ -90,7 +100,6 @@ markers = [
     "integration: marks tests with real infrastructure env",
 ]
 
-
 [tool.coverage.report]
 exclude_lines = [
     "# pragma: no cover",
@@ -106,7 +115,6 @@ omit = [
     "venv/*",
     "tests/*"
 ]
-
 
 [tool.ruff]
 line-length = 120

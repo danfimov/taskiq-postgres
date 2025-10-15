@@ -1,5 +1,7 @@
 args := $(wordlist 2, 100, $(MAKECMDGOALS))
 
+VIRTUAL_ENV=.venv
+
 .DEFAULT:
 	@echo "No such command (or you pass two or many targets to ). List of possible commands: make help"
 
@@ -35,8 +37,16 @@ run_infra: ## Run rabbitmq in docker for integration tests
 
 .PHONY: lint
 lint: ## Run linting
-	@uv run ruff check src tests
-	@uv run mypy src
+	@$(MAKE) ruff
+	@$(MAKE) mypy
+
+.PHONY: ruff
+ruff: ## Run ruff linting
+	@uv run --active --frozen ruff check src tests
+
+.PHONY: mypy
+mypy: ## Run mypy type checking
+	@uv run --active --frozen mypy src
 
 .PHONY: format
 format: ## Run formatting
