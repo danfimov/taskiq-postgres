@@ -1,14 +1,15 @@
 import uuid
 from logging import getLogger
 
+from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
-from pydantic import ValidationError
 from taskiq import ScheduledTask
 
 from taskiq_pg._internal import BasePostgresScheduleSource
 from taskiq_pg.psycopg.queries import (
     CREATE_SCHEDULES_TABLE_QUERY,
     DELETE_ALL_SCHEDULES_QUERY,
+    DELETE_SCHEDULE_QUERY,
     INSERT_SCHEDULE_QUERY,
     SELECT_SCHEDULES_QUERY,
 )
@@ -25,7 +26,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
     async def _update_schedules_on_startup(self, schedules: list[ScheduledTask]) -> None:
         """Update schedules in the database on startup: truncate table and insert new ones."""
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
-            await cursor.execute(DELETE_ALL_SCHEDULES_QUERY.format(self._table_name))
+            await cursor.execute(sql.SQL(DELETE_ALL_SCHEDULES_QUERY).format(sql.Identifier(self._table_name)))
             data_to_insert: list = [
                 [
                     uuid.UUID(schedule.schedule_id),
@@ -37,45 +38,9 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
                 for schedule in schedules
             ]
             await cursor.executemany(
-                INSERT_SCHEDULE_QUERY.format(self._table_name),
+                sql.SQL(INSERT_SCHEDULE_QUERY).format(sql.Identifier(self._table_name)),
                 data_to_insert,
             )
-
-    def _get_schedules_from_broker_tasks(self) -> list[ScheduledTask]:
-        """Extract schedules from the broker's registered tasks."""
-        scheduled_tasks_for_creation: list[ScheduledTask] = []
-        for task_name, task in self._broker.get_all_tasks().items():
-            if "schedule" not in task.labels:
-                logger.debug("Task %s has no schedule, skipping", task_name)
-                continue
-            if not isinstance(task.labels["schedule"], list):
-                logger.warning(
-                    "Schedule for task %s is not a list, skipping",
-                    task_name,
-                )
-                continue
-            for schedule in task.labels["schedule"]:
-                try:
-                    new_schedule = ScheduledTask.model_validate(
-                        {
-                            "task_name": task_name,
-                            "labels": schedule.get("labels", {}),
-                            "args": schedule.get("args", []),
-                            "kwargs": schedule.get("kwargs", {}),
-                            "schedule_id": str(uuid.uuid4()),
-                            "cron": schedule.get("cron", None),
-                            "cron_offset": schedule.get("cron_offset", None),
-                            "time": schedule.get("time", None),
-                        },
-                    )
-                    scheduled_tasks_for_creation.append(new_schedule)
-                except ValidationError:
-                    logger.exception(
-                        "Schedule for task %s is not valid, skipping",
-                        task_name,
-                    )
-                    continue
-        return scheduled_tasks_for_creation
 
     async def startup(self) -> None:
         """
@@ -93,9 +58,9 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
 
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(
-                CREATE_SCHEDULES_TABLE_QUERY.format(self._table_name),
+                sql.SQL(CREATE_SCHEDULES_TABLE_QUERY).format(sql.Identifier(self._table_name)),
             )
-        scheduled_tasks_for_creation = self._get_schedules_from_broker_tasks()
+        scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
         await self._update_schedules_on_startup(scheduled_tasks_for_creation)
 
     async def shutdown(self) -> None:
@@ -108,7 +73,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
         schedules = []
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             rows_with_schedules = await cursor.execute(
-                SELECT_SCHEDULES_QUERY.format(self._table_name),
+                sql.SQL(SELECT_SCHEDULES_QUERY).format(sql.Identifier(self._table_name)),
             )
             rows = await rows_with_schedules.fetchall()
             for schedule_id, task_name, schedule in rows:
@@ -127,3 +92,42 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
                     ),
                 )
         return schedules
+
+    async def add_schedule(self, schedule: "ScheduledTask") -> None:
+        """
+        Add a new schedule.
+
+        Args:
+            schedule: schedule to add.
+        """
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                sql.SQL(INSERT_SCHEDULE_QUERY).format(sql.Identifier(self._table_name)),
+                [
+                    uuid.UUID(schedule.schedule_id),
+                    schedule.task_name,
+                    schedule.model_dump_json(
+                        exclude={"schedule_id", "task_name"},
+                    ),
+                ]
+            )
+
+    async def delete_schedule(self, schedule_id: str) -> None:
+        """
+        Method to delete schedule by id.
+
+        This is useful for schedule cancelation.
+
+        Args:
+            schedule_id: id of schedule to delete.
+        """
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                sql.SQL(DELETE_SCHEDULE_QUERY).format(sql.Identifier(self._table_name)),
+                [schedule_id],
+            )
+
+    async def post_send(self, task: ScheduledTask) -> None:
+        """Delete a task after it's completed."""
+        if task.time is not None:
+            await self.delete_schedule(task.schedule_id)

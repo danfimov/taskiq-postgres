@@ -1,15 +1,14 @@
 import json
-import uuid
 from logging import getLogger
 
 import asyncpg
-from pydantic import ValidationError
 from taskiq import ScheduledTask
 
 from taskiq_pg._internal import BasePostgresScheduleSource
 from taskiq_pg.asyncpg.queries import (
     CREATE_SCHEDULES_TABLE_QUERY,
     DELETE_ALL_SCHEDULES_QUERY,
+    DELETE_SCHEDULE_QUERY,
     INSERT_SCHEDULE_QUERY,
     SELECT_SCHEDULES_QUERY,
 )
@@ -37,42 +36,6 @@ class AsyncpgScheduleSource(BasePostgresScheduleSource):
                     ),
                 )
 
-    def _get_schedules_from_broker_tasks(self) -> list[ScheduledTask]:
-        """Extract schedules from the broker's registered tasks."""
-        scheduled_tasks_for_creation: list[ScheduledTask] = []
-        for task_name, task in self._broker.get_all_tasks().items():
-            if "schedule" not in task.labels:
-                logger.debug("Task %s has no schedule, skipping", task_name)
-                continue
-            if not isinstance(task.labels["schedule"], list):
-                logger.warning(
-                    "Schedule for task %s is not a list, skipping",
-                    task_name,
-                )
-                continue
-            for schedule in task.labels["schedule"]:
-                try:
-                    new_schedule = ScheduledTask.model_validate(
-                        {
-                            "task_name": task_name,
-                            "labels": schedule.get("labels", {}),
-                            "args": schedule.get("args", []),
-                            "kwargs": schedule.get("kwargs", {}),
-                            "schedule_id": str(uuid.uuid4()),
-                            "cron": schedule.get("cron", None),
-                            "cron_offset": schedule.get("cron_offset", None),
-                            "time": schedule.get("time", None),
-                        },
-                    )
-                    scheduled_tasks_for_creation.append(new_schedule)
-                except ValidationError:
-                    logger.exception(
-                        "Schedule for task %s is not valid, skipping",
-                        task_name,
-                    )
-                    continue
-        return scheduled_tasks_for_creation
-
     async def startup(self) -> None:
         """
         Initialize the schedule source.
@@ -89,7 +52,7 @@ class AsyncpgScheduleSource(BasePostgresScheduleSource):
                 self._table_name,
             ),
         )
-        scheduled_tasks_for_creation = self._get_schedules_from_broker_tasks()
+        scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
         await self._update_schedules_on_startup(scheduled_tasks_for_creation)
 
     async def shutdown(self) -> None:
@@ -121,3 +84,38 @@ class AsyncpgScheduleSource(BasePostgresScheduleSource):
                 ),
             )
         return schedules
+
+    async def add_schedule(self, schedule: "ScheduledTask") -> None:
+        """
+        Add a new schedule.
+
+        Args:
+            schedule: schedule to add.
+        """
+        await self._database_pool.execute(
+            INSERT_SCHEDULE_QUERY.format(self._table_name),
+            str(schedule.schedule_id),
+            schedule.task_name,
+            schedule.model_dump_json(
+                exclude={"schedule_id", "task_name"},
+            ),
+        )
+
+    async def delete_schedule(self, schedule_id: str) -> None:
+        """
+        Method to delete schedule by id.
+
+        This is useful for schedule cancelation.
+
+        Args:
+            schedule_id: id of schedule to delete.
+        """
+        await self._database_pool.execute(
+            DELETE_SCHEDULE_QUERY.format(self._table_name),
+            schedule_id,
+        )
+
+    async def post_send(self, task: ScheduledTask) -> None:
+        """Delete a task after it's completed."""
+        if task.time is not None:
+            await self.delete_schedule(task.schedule_id)
