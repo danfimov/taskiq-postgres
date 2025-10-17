@@ -69,6 +69,7 @@ lint = [
     "asyncpg-stubs>=0.30.2",
 ]
 test = [
+    "polyfactory>=2.22.2",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=7.0.0",
@@ -125,10 +126,8 @@ select = ["ALL"]
 ignore = [
     # TODO: enable this rules
     "TRY301",
-    "PLR0913",
-    "D401",
     "ANN401",
-    "PERF203",
+    # "PERF203",
 
 
     # boolean args
@@ -173,6 +172,9 @@ ignore = [
     "ANN",
     "INP001",
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.isort]
 known-local-folder = ["taskiq_pg"]

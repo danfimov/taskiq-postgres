@@ -29,6 +29,10 @@ init: ## Install all project dependencies with extras
 	@$(MAKE) check_venv
 	@uv sync --all-extras
 
+.PHONY: run_docs
+run_docs: ## Run documentation server
+	@uv run mkdocs serve --livereload
+
 .PHONY: run_infra
 run_infra: ## Run rabbitmq in docker for integration tests
 	@docker compose -f docker-compose.yml up -d

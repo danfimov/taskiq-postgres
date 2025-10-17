@@ -16,7 +16,7 @@ _T = tp.TypeVar("_T")
 class BasePostgresBroker(AsyncBroker, abc.ABC):
     """Base class for Postgres brokers."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         result_backend: AsyncResultBackend[_T] | None = None,
