@@ -4,6 +4,8 @@ version = "0.6.0"
 description = "PostgreSQL integration for taskiq"
 summary = "PostgreSQL integration for taskiq"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
