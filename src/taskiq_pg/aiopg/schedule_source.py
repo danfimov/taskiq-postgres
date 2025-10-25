@@ -1,3 +1,4 @@
+import asyncio
 from logging import getLogger
 
 from aiopg import Pool, create_pool
@@ -27,6 +28,8 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
             await cursor.execute(DELETE_ALL_SCHEDULES_QUERY.format(self._table_name))
             for schedule in schedules:
+                print(schedule)
+
                 await cursor.execute(
                     INSERT_SCHEDULE_QUERY.format(self._table_name),
                     [
@@ -45,6 +48,7 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         Construct new connection pool, create new table for schedules if not exists
         and fill table with schedules from task labels.
         """
+        await super().startup()
         try:
             self._database_pool = await create_pool(
                 dsn=self.dsn,
@@ -52,8 +56,7 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             )
             async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
                 await cursor.execute(CREATE_SCHEDULES_TABLE_QUERY.format(self._table_name))
-            scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
-            await self._update_schedules_on_startup(scheduled_tasks_for_creation)
+            await self._update_schedules_on_startup(list(self.schedules.values()))
         except Exception as error:
             raise exceptions.DatabaseConnectionError(str(error)) from error
 
@@ -120,7 +123,8 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
                 [schedule_id],
             )
 
-    async def post_send(self, task: ScheduledTask) -> None:
+
+    def post_send(self, task: ScheduledTask) -> None:
         """Delete a task after it's completed."""
         if task.time is not None:
-            await self.delete_schedule(task.schedule_id)
+            asyncio.run(self.delete_schedule(task.schedule_id))
