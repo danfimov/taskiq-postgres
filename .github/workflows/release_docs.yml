@@ -1,12 +1,5 @@
 name: Release docs
 on:
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Pull request number to release docs for
-        required: true
-        type: string
-
   pull_request:
     # types: [closed]
     branches: [ main ]
@@ -16,7 +9,7 @@ permissions:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true) }}
+    # if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
