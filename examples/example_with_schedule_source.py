@@ -39,6 +39,9 @@ scheduler = TaskiqScheduler(
             "kwargs": {},  # type: dict[str, Any] | None, can be omitted.
             "labels": {},  # type: dict[str, Any] | None, can be omitted.
         },
+        {
+            "interval": 10, # type: int | timedelta | None
+        },
     ],
 )
 async def best_task_ever() -> None:

@@ -81,6 +81,7 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
                         "cron": schedule["cron"],
                         "cron_offset": schedule["cron_offset"],
                         "time": schedule["time"],
+                        "interval": schedule["interval"],
                     },
                 ),
             )
