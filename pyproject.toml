@@ -1,6 +1,6 @@
 [project]
 name = "taskiq-postgres"
-version = "0.6.0"
+version = "0.6.1"
 description = "PostgreSQL integration for taskiq"
 summary = "PostgreSQL integration for taskiq"
 readme = "README.md"
