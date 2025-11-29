@@ -79,7 +79,7 @@ test = [
     # for database in tests
     "sqlalchemy-utils>=0.42.0",
     # for faster asyncio loop in tests
-    "uvloop>=0.21.0",
+    "uvloop>=0.22.1",
 ]
 docs = [
     "mkdocs-material>=9.6.22",
