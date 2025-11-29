@@ -84,6 +84,7 @@ class BasePostgresScheduleSource(ScheduleSource):
                             "schedule_id": str(uuid.uuid4()),
                             "cron": schedule.get("cron", None),
                             "cron_offset": schedule.get("cron_offset", None),
+                            "interval": schedule.get("interval", None),
                             "time": schedule.get("time", None),
                         },
                     )

@@ -159,7 +159,7 @@ async def test_when_call_add_schedule__then_schedule_creates(
     schedule_source_class: type[PSQLPyScheduleSource | AiopgScheduleSource | AsyncpgScheduleSource],
 ) -> None:
     # Given
-    new_schedule = ScheduledTaskFactory.build(task_name="tests:added_schedule", cron="*/5 * * * *")
+    new_schedule = ScheduledTaskFactory.build(task_name="tests:added_schedule", cron="*/5 * * * *", interval=None)
     async with _get_schedule_source(schedule_source_class, broker_with_scheduled_tasks, pg_dsn) as schedule_source:
         await schedule_source.startup()
 
