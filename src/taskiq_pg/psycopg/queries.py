@@ -1,7 +1,8 @@
 CREATE_TABLE_QUERY = """
 CREATE TABLE IF NOT EXISTS {} (
     task_id {} UNIQUE,
-    result BYTEA
+    result BYTEA,
+    progress BYTEA
 )
 """
 
@@ -14,6 +15,17 @@ INSERT INTO {} VALUES (%s, %s)
 ON CONFLICT (task_id)
 DO UPDATE
 SET result = EXCLUDED.result;
+"""
+
+INSERT_PROGRESS_QUERY = """
+INSERT INTO {} VALUES (%s, NULL, %s)
+ON CONFLICT (task_id)
+DO UPDATE
+SET progress = %s
+"""
+
+SELECT_PROGRESS_QUERY = """
+SELECT progress FROM {} WHERE task_id = %s
 """
 
 IS_RESULT_EXISTS_QUERY = """

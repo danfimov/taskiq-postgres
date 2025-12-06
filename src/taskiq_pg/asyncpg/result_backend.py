@@ -1,18 +1,19 @@
-from __future__ import annotations
-
 import typing as tp
 
 import asyncpg
 from taskiq import TaskiqResult
 from taskiq.compat import model_dump, model_validate
+from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.asyncpg.queries import (
     CREATE_INDEX_QUERY,
     CREATE_TABLE_QUERY,
     DELETE_RESULT_QUERY,
+    INSERT_PROGRESS_QUERY,
     INSERT_RESULT_QUERY,
     IS_RESULT_EXISTS_QUERY,
+    SELECT_PROGRESS_QUERY,
     SELECT_RESULT_QUERY,
 )
 
@@ -124,3 +125,44 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         if not with_logs:
             taskiq_result.log = None
         return taskiq_result
+
+    async def set_progress(
+        self,
+        task_id: str,
+        progress: TaskProgress[tp.Any],
+    ) -> None:
+        """
+        Saves progress.
+
+        :param task_id: task's id.
+        :param progress: progress of execution.
+        """
+        await self._database_pool.execute(
+            INSERT_PROGRESS_QUERY.format(
+                self.table_name,
+            ),
+            task_id,
+            self.serializer.dumpb(model_dump(progress)),
+        )
+
+    async def get_progress(
+        self,
+        task_id: str,
+    ) -> TaskProgress[tp.Any] | None:
+        """
+        Gets progress.
+
+        :param task_id: task's id.
+        """
+        progress_in_bytes = await self._database_pool.fetchval(
+            SELECT_PROGRESS_QUERY.format(
+                self.table_name,
+            ),
+            task_id,
+        )
+        if progress_in_bytes is None:
+            return None
+        return model_validate(
+            TaskProgress[tp.Any],
+            self.serializer.loadb(progress_in_bytes),
+        )
