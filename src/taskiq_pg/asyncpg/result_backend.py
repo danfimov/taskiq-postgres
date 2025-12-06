@@ -21,7 +21,7 @@ from taskiq_pg.asyncpg.queries import (
 class AsyncpgResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on asyncpg."""
 
-    _database_pool: asyncpg.Pool[tp.Any]
+    _database_pool: "asyncpg.Pool[tp.Any]"
 
     async def startup(self) -> None:
         """
