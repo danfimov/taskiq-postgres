@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-import typing as tp
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -10,15 +7,11 @@ from polyfactory.factories.pydantic_factory import ModelFactory
 from sqlalchemy_utils.types.enriched_datetime.arrow_datetime import datetime
 from taskiq import ScheduledTask
 
+from taskiq_pg._internal import BasePostgresBroker, BasePostgresScheduleSource
 from taskiq_pg.aiopg import AiopgScheduleSource
 from taskiq_pg.asyncpg import AsyncpgScheduleSource
 from taskiq_pg.psqlpy import PSQLPyBroker, PSQLPyScheduleSource
 from taskiq_pg.psycopg import PsycopgScheduleSource
-
-
-if tp.TYPE_CHECKING:
-    from taskiq_pg._internal import BasePostgresBroker, BasePostgresScheduleSource
-
 
 
 class ScheduledTaskFactory(ModelFactory[ScheduledTask]):
@@ -177,7 +170,6 @@ async def test_when_call_add_schedule__then_schedule_creates(
         assert added_schedule is not None
 
 
-
 @pytest.mark.integration
 @pytest.mark.parametrize(
     "schedule_source_class",
@@ -205,7 +197,4 @@ async def test_when_call_delete_schedule__then_schedule_deleted(
         # Then
         schedules: list[ScheduledTask] = await schedule_source.get_schedules()
         assert len(schedules) == 2
-        assert all(
-            task.schedule_id != schedule_id_to_delete
-            for task in schedules
-        )
+        assert all(task.schedule_id != schedule_id_to_delete for task in schedules)

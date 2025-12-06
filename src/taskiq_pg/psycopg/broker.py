@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
 import typing as tp
+from collections.abc import AsyncGenerator
 from contextlib import suppress
 
 import psycopg
@@ -18,10 +17,6 @@ from taskiq_pg.psycopg.queries import (
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
-
-
-if tp.TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
 
 
 logger = logging.getLogger("taskiq.psycopg_broker")

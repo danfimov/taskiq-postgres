@@ -1,14 +1,9 @@
-from __future__ import annotations
-
 import abc
 import typing as tp
 
 from taskiq import AsyncResultBackend
+from taskiq.abc.serializer import TaskiqSerializer
 from taskiq.serializers import PickleSerializer
-
-
-if tp.TYPE_CHECKING:
-    from taskiq.abc.serializer import TaskiqSerializer
 
 
 ReturnType = tp.TypeVar("ReturnType")

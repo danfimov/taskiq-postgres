@@ -1,10 +1,13 @@
-from __future__ import annotations
-
 import typing as tp
 import uuid
 
 import asyncpg
 import pytest
+from taskiq import (
+    InMemoryBroker,
+    TaskiqDepends,
+)
+from taskiq.depends.progress_tracker import ProgressTracker, TaskState
 
 from taskiq_pg.aiopg import AiopgResultBackend
 from taskiq_pg.asyncpg import AsyncpgResultBackend
@@ -130,3 +133,87 @@ async def test_when_startup_called__then_table_is_created(
             await conn.execute(f"DROP TABLE IF EXISTS {table_name}")
         finally:
             await conn.close()
+
+
+@pytest.mark.parametrize(
+    "backend_class",
+    [
+        AsyncpgResultBackend,
+        AiopgResultBackend,
+        PSQLPyResultBackend,
+        PsycopgResultBackend,
+    ],
+)
+@pytest.mark.parametrize(
+    ("state", "meta"),
+    [
+        (TaskState.STARTED, "hello world!"),
+        ("retry", "retry error!"),
+        ("custom state", {"Complex": "Value"}),
+    ],
+)
+async def test_when_task_tracker_set_progress__then_it_is_stored(
+    pg_dsn: str,
+    backend_class: type[AsyncpgResultBackend | AiopgResultBackend | PSQLPyResultBackend | PsycopgResultBackend],
+    state: TaskState | str,
+    meta: tp.Any,
+) -> None:
+    # given
+    table_name: str = f"taskiq_results_{uuid.uuid4().hex}"
+    result_backend = backend_class(
+        dsn=pg_dsn,
+        table_name=table_name,
+    )
+    broker = InMemoryBroker().with_result_backend(result_backend)
+    await result_backend.startup()
+
+    @broker.task
+    async def test_func(tes_val: ProgressTracker[tp.Any] = TaskiqDepends()) -> None:  # noqa: B008
+        await tes_val.set_progress(state, meta)
+
+    # when
+    kicker = await test_func.kiq()
+    result = await kicker.wait_result()
+
+    # then
+    assert not result.is_err
+    progress = await broker.result_backend.get_progress(kicker.task_id)
+    assert progress is not None
+    assert progress.meta == meta
+    assert progress.state == state
+
+
+@pytest.mark.parametrize(
+    "backend_class",
+    [
+        AsyncpgResultBackend,
+        AiopgResultBackend,
+        PSQLPyResultBackend,
+        PsycopgResultBackend,
+    ],
+)
+async def test_when_task_progress_is_not_set__get_progress_should_return_none(
+    pg_dsn: str,
+    backend_class: type[AsyncpgResultBackend | AiopgResultBackend | PSQLPyResultBackend | PsycopgResultBackend],
+) -> None:
+    # given
+    table_name: str = f"taskiq_results_{uuid.uuid4().hex}"
+    result_backend = backend_class(
+        dsn=pg_dsn,
+        table_name=table_name,
+    )
+    broker = InMemoryBroker().with_result_backend(result_backend)
+    await result_backend.startup()
+
+    @broker.task
+    async def test_func() -> None:
+        pass
+
+    # when
+    kicker = await test_func.kiq()
+    result = await kicker.wait_result()
+
+    # then
+    assert not result.is_err
+    progress = await broker.result_backend.get_progress(kicker.task_id)
+    assert progress is None

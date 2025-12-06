@@ -1,19 +1,14 @@
-from __future__ import annotations
-
 import asyncio
 import typing as tp
 import uuid
 
+import asyncpg
 import pytest
 from taskiq import BrokerMessage
 
 from taskiq_pg.asyncpg import AsyncpgBroker
 from taskiq_pg.psqlpy import PSQLPyBroker
 from taskiq_pg.psycopg import PsycopgBroker
-
-
-if tp.TYPE_CHECKING:
-    import asyncpg
 
 
 @pytest.fixture
