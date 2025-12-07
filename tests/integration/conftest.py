@@ -6,6 +6,9 @@ import asyncpg
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy_utils import create_database, database_exists
+from taskiq import InMemoryBroker
+
+from taskiq_pg._internal.result_backend import BasePostgresResultBackend
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -57,3 +60,18 @@ async def connection(pg_dsn: str) -> tp.AsyncGenerator[asyncpg.Connection, None]
         yield connection
     finally:
         await connection.close()
+
+
+@pytest.fixture
+async def broker_with_backend(
+    pg_dsn: str,
+    request: pytest.FixtureRequest,
+) -> tuple[InMemoryBroker, BasePostgresResultBackend]:
+    table_name: str = f"taskiq_results_{uuid.uuid4().hex}"
+    result_backend = request.param(
+        dsn=pg_dsn,
+        table_name=table_name,
+    )
+    broker = InMemoryBroker().with_result_backend(result_backend)
+    await result_backend.startup()
+    return broker, result_backend

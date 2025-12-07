@@ -9,6 +9,7 @@ nav:
   - Overview:
       - index.md
   - Tutorial:
+      - tutorial/result_backend.md
       - tutorial/schedule_source.md
       - tutorial/common_issues.md
   - API:

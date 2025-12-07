@@ -1,16 +1,12 @@
-from __future__ import annotations
-
 import typing as tp
 
 from aiopg import Pool, create_pool
+from taskiq import TaskiqResult
+from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg import exceptions
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.aiopg import queries
-
-
-if tp.TYPE_CHECKING:
-    from taskiq import TaskiqResult
 
 
 class AiopgResultBackend(BasePostgresResultBackend):
@@ -34,6 +30,12 @@ class AiopgResultBackend(BasePostgresResultBackend):
             async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
                 await cursor.execute(
                     queries.CREATE_TABLE_QUERY.format(
+                        self.table_name,
+                        self.field_for_task_id,
+                    ),
+                )
+                await cursor.execute(
+                    queries.ADD_PROGRESS_COLUMN_QUERY.format(
                         self.table_name,
                         self.field_for_task_id,
                     ),
@@ -148,3 +150,50 @@ class AiopgResultBackend(BasePostgresResultBackend):
                 taskiq_result.log = None
 
             return taskiq_result
+
+    async def set_progress(
+        self,
+        task_id: str,
+        progress: TaskProgress[tp.Any],
+    ) -> None:
+        """
+        Saves progress.
+
+        :param task_id: task's id.
+        :param progress: progress of execution.
+        """
+        dumped_progress = self.serializer.dumpb(progress)
+        async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                queries.INSERT_PROGRESS_QUERY.format(
+                    self.table_name,
+                ),
+                (
+                    task_id,
+                    dumped_progress,
+                    dumped_progress,
+                ),
+            )
+
+    async def get_progress(
+        self,
+        task_id: str,
+    ) -> TaskProgress[tp.Any] | None:
+        """
+        Gets progress.
+
+        :param task_id: task's id.
+        """
+        async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                queries.SELECT_PROGRESS_QUERY.format(
+                    self.table_name,
+                ),
+                (task_id,),
+            )
+            progress = await cursor.fetchone()
+            if not progress or progress[0] is None:
+                return None
+            progress_in_bytes: bytes = progress[0]
+            taskiq_progress: TaskProgress[tp.Any] = self.serializer.loadb(progress_in_bytes)
+            return taskiq_progress

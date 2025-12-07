@@ -1,22 +1,14 @@
-from __future__ import annotations
-
 import typing as tp
 
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 from taskiq import TaskiqResult
 from taskiq.compat import model_dump, model_validate
+from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.exceptions import ResultIsMissingError
-from taskiq_pg.psycopg.queries import (
-    CREATE_INDEX_QUERY,
-    CREATE_TABLE_QUERY,
-    DELETE_RESULT_QUERY,
-    INSERT_RESULT_QUERY,
-    IS_RESULT_EXISTS_QUERY,
-    SELECT_RESULT_QUERY,
-)
+from taskiq_pg.psycopg import queries
 
 
 class PsycopgResultBackend(BasePostgresResultBackend):
@@ -39,13 +31,18 @@ class PsycopgResultBackend(BasePostgresResultBackend):
         await self._database_pool.open()
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(
-                query=sql.SQL(CREATE_TABLE_QUERY).format(
+                query=sql.SQL(queries.CREATE_TABLE_QUERY).format(
                     sql.Identifier(self.table_name),
                     sql.SQL(self.field_for_task_id),
                 ),
             )
             await cursor.execute(
-                query=sql.SQL(CREATE_INDEX_QUERY).format(
+                query=sql.SQL(queries.ADD_PROGRESS_COLUMN_QUERY).format(
+                    sql.Identifier(self.table_name),
+                ),
+            )
+            await cursor.execute(
+                query=sql.SQL(queries.CREATE_INDEX_QUERY).format(
                     sql.Identifier(self.table_name + "_task_id_idx"),
                     sql.Identifier(self.table_name),
                 ),
@@ -69,7 +66,7 @@ class PsycopgResultBackend(BasePostgresResultBackend):
         """
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(
-                query=sql.SQL(INSERT_RESULT_QUERY).format(
+                query=sql.SQL(queries.INSERT_RESULT_QUERY).format(
                     sql.Identifier(self.table_name),
                 ),
                 params=[
@@ -88,7 +85,7 @@ class PsycopgResultBackend(BasePostgresResultBackend):
         """
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             execute_result = await cursor.execute(
-                query=sql.SQL(IS_RESULT_EXISTS_QUERY).format(
+                query=sql.SQL(queries.IS_RESULT_EXISTS_QUERY).format(
                     sql.Identifier(self.table_name),
                 ),
                 params=[task_id],
@@ -111,7 +108,7 @@ class PsycopgResultBackend(BasePostgresResultBackend):
         """
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             execute_result = await cursor.execute(
-                query=sql.SQL(SELECT_RESULT_QUERY).format(
+                query=sql.SQL(queries.SELECT_RESULT_QUERY).format(
                     sql.Identifier(self.table_name),
                 ),
                 params=[task_id],
@@ -124,7 +121,7 @@ class PsycopgResultBackend(BasePostgresResultBackend):
 
             if not self.keep_results:
                 await cursor.execute(
-                    query=sql.SQL(DELETE_RESULT_QUERY).format(
+                    query=sql.SQL(queries.DELETE_RESULT_QUERY).format(
                         sql.Identifier(self.table_name),
                     ),
                     params=[task_id],
@@ -139,3 +136,50 @@ class PsycopgResultBackend(BasePostgresResultBackend):
                 taskiq_result.log = None
 
             return taskiq_result
+
+    async def set_progress(
+        self,
+        task_id: str,
+        progress: TaskProgress[tp.Any],
+    ) -> None:
+        """
+        Saves progress.
+
+        :param task_id: task's id.
+        :param progress: progress of execution.
+        """
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                query=sql.SQL(queries.INSERT_PROGRESS_QUERY).format(
+                    sql.Identifier(self.table_name),
+                ),
+                params=[
+                    task_id,
+                    self.serializer.dumpb(model_dump(progress)),
+                    self.serializer.dumpb(model_dump(progress)),
+                ],
+            )
+
+    async def get_progress(
+        self,
+        task_id: str,
+    ) -> TaskProgress[tp.Any] | None:
+        """
+        Gets progress.
+
+        :param task_id: task's id.
+        """
+        async with self._database_pool.connection() as connection, connection.cursor() as cursor:
+            execute_result = await cursor.execute(
+                query=sql.SQL(queries.SELECT_PROGRESS_QUERY).format(
+                    sql.Identifier(self.table_name),
+                ),
+                params=[task_id],
+            )
+            progress_in_bytes = await execute_result.fetchone()
+            if progress_in_bytes is None or progress_in_bytes[0] is None:
+                return None
+            return model_validate(
+                TaskProgress[tp.Any],
+                self.serializer.loadb(progress_in_bytes[0]),
+            )

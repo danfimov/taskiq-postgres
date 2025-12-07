@@ -1,8 +1,13 @@
 CREATE_TABLE_QUERY = """
 CREATE TABLE IF NOT EXISTS {} (
     task_id {} UNIQUE,
-    result BYTEA
+    result BYTEA,
+    progress BYTEA
 )
+"""
+
+ADD_PROGRESS_COLUMN_QUERY = """
+ALTER TABLE {} ADD COLUMN IF NOT EXISTS progress BYTEA;
 """
 
 CREATE_INDEX_QUERY = """
@@ -10,15 +15,26 @@ CREATE INDEX IF NOT EXISTS {}_task_id_idx ON {} USING HASH (task_id)
 """
 
 INSERT_RESULT_QUERY = """
-INSERT INTO {} VALUES ($1, $2)
+INSERT INTO {} VALUES ($1, $2, NULL)
 ON CONFLICT (task_id)
 DO UPDATE
 SET result = $2
 """
 
+INSERT_PROGRESS_QUERY = """
+INSERT INTO {} VALUES ($1, NULL, $2)
+ON CONFLICT (task_id)
+DO UPDATE
+SET progress = $2
+"""
+
+SELECT_PROGRESS_QUERY = """
+SELECT progress FROM {} WHERE task_id = $1
+"""
+
 IS_RESULT_EXISTS_QUERY = """
 SELECT EXISTS(
-    SELECT 1 FROM {} WHERE task_id = $1
+    SELECT 1 FROM {} WHERE task_id = $1 and result IS NOT NULL
 )
 """
 

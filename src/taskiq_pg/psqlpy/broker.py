@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 import asyncio
 import logging
 import typing as tp
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from datetime import datetime
 
 import psqlpy
 from psqlpy.exceptions import ConnectionExecuteError
@@ -17,11 +17,6 @@ from taskiq_pg.psqlpy.queries import (
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
-
-
-if tp.TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-    from datetime import datetime
 
 
 logger = logging.getLogger("taskiq.psqlpy_broker")
