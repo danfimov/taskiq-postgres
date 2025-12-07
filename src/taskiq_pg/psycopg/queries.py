@@ -6,6 +6,10 @@ CREATE TABLE IF NOT EXISTS {} (
 )
 """
 
+ADD_PROGRESS_COLUMN_QUERY = """
+ALTER TABLE {} ADD COLUMN IF NOT EXISTS progress BYTEA;
+"""
+
 CREATE_INDEX_QUERY = """
 CREATE INDEX IF NOT EXISTS {} ON {} USING HASH (task_id)
 """
@@ -30,7 +34,7 @@ SELECT progress FROM {} WHERE task_id = %s
 
 IS_RESULT_EXISTS_QUERY = """
 SELECT EXISTS(
-    SELECT 1 FROM {} WHERE task_id = %s
+    SELECT 1 FROM {} WHERE task_id = %s and result IS NOT NULL
 );
 """
 

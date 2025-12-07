@@ -6,16 +6,7 @@ from taskiq.compat import model_dump, model_validate
 from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
-from taskiq_pg.asyncpg.queries import (
-    CREATE_INDEX_QUERY,
-    CREATE_TABLE_QUERY,
-    DELETE_RESULT_QUERY,
-    INSERT_PROGRESS_QUERY,
-    INSERT_RESULT_QUERY,
-    IS_RESULT_EXISTS_QUERY,
-    SELECT_PROGRESS_QUERY,
-    SELECT_RESULT_QUERY,
-)
+from taskiq_pg.asyncpg import queries
 
 
 class AsyncpgResultBackend(BasePostgresResultBackend):
@@ -36,13 +27,18 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         self._database_pool = _database_pool
 
         await self._database_pool.execute(
-            CREATE_TABLE_QUERY.format(
+            queries.CREATE_TABLE_QUERY.format(
                 self.table_name,
                 self.field_for_task_id,
             ),
         )
         await self._database_pool.execute(
-            CREATE_INDEX_QUERY.format(
+            queries.ADD_PROGRESS_COLUMN_QUERY.format(
+                self.table_name,
+            ),
+        )
+        await self._database_pool.execute(
+            queries.CREATE_INDEX_QUERY.format(
                 self.table_name,
                 self.table_name,
             ),
@@ -65,7 +61,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         :param result: result of the task.
         """
         _ = await self._database_pool.execute(
-            INSERT_RESULT_QUERY.format(
+            queries.INSERT_RESULT_QUERY.format(
                 self.table_name,
             ),
             task_id,
@@ -82,7 +78,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         return tp.cast(
             "bool",
             await self._database_pool.fetchval(
-                IS_RESULT_EXISTS_QUERY.format(
+                queries.IS_RESULT_EXISTS_QUERY.format(
                     self.table_name,
                 ),
                 task_id,
@@ -105,7 +101,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         result_in_bytes = tp.cast(
             "bytes",
             await self._database_pool.fetchval(
-                SELECT_RESULT_QUERY.format(
+                queries.SELECT_RESULT_QUERY.format(
                     self.table_name,
                 ),
                 task_id,
@@ -113,7 +109,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         )
         if not self.keep_results:
             await self._database_pool.execute(
-                DELETE_RESULT_QUERY.format(
+                queries.DELETE_RESULT_QUERY.format(
                     self.table_name,
                 ),
                 task_id,
@@ -138,7 +134,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         :param progress: progress of execution.
         """
         await self._database_pool.execute(
-            INSERT_PROGRESS_QUERY.format(
+            queries.INSERT_PROGRESS_QUERY.format(
                 self.table_name,
             ),
             task_id,
@@ -155,7 +151,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         :param task_id: task's id.
         """
         progress_in_bytes = await self._database_pool.fetchval(
-            SELECT_PROGRESS_QUERY.format(
+            queries.SELECT_PROGRESS_QUERY.format(
                 self.table_name,
             ),
             task_id,

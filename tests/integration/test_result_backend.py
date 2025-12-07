@@ -9,6 +9,7 @@ from taskiq import (
 )
 from taskiq.depends.progress_tracker import ProgressTracker, TaskState
 
+from taskiq_pg._internal.result_backend import BasePostgresResultBackend
 from taskiq_pg.aiopg import AiopgResultBackend
 from taskiq_pg.asyncpg import AsyncpgResultBackend
 from taskiq_pg.psqlpy import PSQLPyResultBackend
@@ -136,13 +137,14 @@ async def test_when_startup_called__then_table_is_created(
 
 
 @pytest.mark.parametrize(
-    "backend_class",
+    "broker_with_backend",
     [
         AsyncpgResultBackend,
         AiopgResultBackend,
         PSQLPyResultBackend,
         PsycopgResultBackend,
     ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     ("state", "meta"),
@@ -153,19 +155,12 @@ async def test_when_startup_called__then_table_is_created(
     ],
 )
 async def test_when_task_tracker_set_progress__then_it_is_stored(
-    pg_dsn: str,
-    backend_class: type[AsyncpgResultBackend | AiopgResultBackend | PSQLPyResultBackend | PsycopgResultBackend],
+    broker_with_backend: tuple[InMemoryBroker, BasePostgresResultBackend],
     state: TaskState | str,
     meta: tp.Any,
 ) -> None:
     # given
-    table_name: str = f"taskiq_results_{uuid.uuid4().hex}"
-    result_backend = backend_class(
-        dsn=pg_dsn,
-        table_name=table_name,
-    )
-    broker = InMemoryBroker().with_result_backend(result_backend)
-    await result_backend.startup()
+    broker, _result_backend = broker_with_backend
 
     @broker.task
     async def test_func(tes_val: ProgressTracker[tp.Any] = TaskiqDepends()) -> None:  # noqa: B008
@@ -184,26 +179,20 @@ async def test_when_task_tracker_set_progress__then_it_is_stored(
 
 
 @pytest.mark.parametrize(
-    "backend_class",
+    "broker_with_backend",
     [
         AsyncpgResultBackend,
         AiopgResultBackend,
         PSQLPyResultBackend,
         PsycopgResultBackend,
     ],
+    indirect=True,
 )
 async def test_when_task_progress_is_not_set__get_progress_should_return_none(
-    pg_dsn: str,
-    backend_class: type[AsyncpgResultBackend | AiopgResultBackend | PSQLPyResultBackend | PsycopgResultBackend],
+    broker_with_backend: tuple[InMemoryBroker, BasePostgresResultBackend],
 ) -> None:
     # given
-    table_name: str = f"taskiq_results_{uuid.uuid4().hex}"
-    result_backend = backend_class(
-        dsn=pg_dsn,
-        table_name=table_name,
-    )
-    broker = InMemoryBroker().with_result_backend(result_backend)
-    await result_backend.startup()
+    broker, _result_backend = broker_with_backend
 
     @broker.task
     async def test_func() -> None:

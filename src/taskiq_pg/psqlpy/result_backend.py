@@ -8,16 +8,7 @@ from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.exceptions import ResultIsMissingError
-from taskiq_pg.psqlpy.queries import (
-    CREATE_INDEX_QUERY,
-    CREATE_TABLE_QUERY,
-    DELETE_RESULT_QUERY,
-    INSERT_PROGRESS_QUERY,
-    INSERT_RESULT_QUERY,
-    IS_RESULT_EXISTS_QUERY,
-    SELECT_PROGRESS_QUERY,
-    SELECT_RESULT_QUERY,
-)
+from taskiq_pg.psqlpy import queries
 
 
 class PSQLPyResultBackend(BasePostgresResultBackend):
@@ -38,13 +29,18 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         )
         connection = await self._database_pool.connection()
         await connection.execute(
-            querystring=CREATE_TABLE_QUERY.format(
+            querystring=queries.CREATE_TABLE_QUERY.format(
                 self.table_name,
                 self.field_for_task_id,
             ),
         )
         await connection.execute(
-            querystring=CREATE_INDEX_QUERY.format(
+            querystring=queries.ADD_PROGRESS_COLUMN_QUERY.format(
+                self.table_name,
+            ),
+        )
+        await connection.execute(
+            querystring=queries.CREATE_INDEX_QUERY.format(
                 self.table_name,
                 self.table_name,
             ),
@@ -68,7 +64,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         """
         connection = await self._database_pool.connection()
         await connection.execute(
-            querystring=INSERT_RESULT_QUERY.format(
+            querystring=queries.INSERT_RESULT_QUERY.format(
                 self.table_name,
             ),
             parameters=[
@@ -89,7 +85,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         return tp.cast(
             "bool",
             await connection.fetch_val(
-                querystring=IS_RESULT_EXISTS_QUERY.format(
+                querystring=queries.IS_RESULT_EXISTS_QUERY.format(
                     self.table_name,
                 ),
                 parameters=[task_id],
@@ -112,7 +108,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         connection: tp.Final = await self._database_pool.connection()
         try:
             result_in_bytes: tp.Final[bytes] = await connection.fetch_val(
-                querystring=SELECT_RESULT_QUERY.format(
+                querystring=queries.SELECT_RESULT_QUERY.format(
                     self.table_name,
                 ),
                 parameters=[task_id],
@@ -123,7 +119,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
 
         if not self.keep_results:
             await connection.execute(
-                querystring=DELETE_RESULT_QUERY.format(
+                querystring=queries.DELETE_RESULT_QUERY.format(
                     self.table_name,
                 ),
                 parameters=[task_id],
@@ -152,7 +148,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         """
         connection = await self._database_pool.connection()
         await connection.execute(
-            querystring=INSERT_PROGRESS_QUERY.format(
+            querystring=queries.INSERT_PROGRESS_QUERY.format(
                 self.table_name,
             ),
             parameters=[
@@ -173,7 +169,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         connection: tp.Final = await self._database_pool.connection()
         try:
             progress_in_bytes = await connection.fetch_val(
-                querystring=SELECT_PROGRESS_QUERY.format(
+                querystring=queries.SELECT_PROGRESS_QUERY.format(
                     self.table_name,
                 ),
                 parameters=[task_id],

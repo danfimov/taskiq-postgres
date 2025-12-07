@@ -35,6 +35,12 @@ class AiopgResultBackend(BasePostgresResultBackend):
                     ),
                 )
                 await cursor.execute(
+                    queries.ADD_PROGRESS_COLUMN_QUERY.format(
+                        self.table_name,
+                        self.field_for_task_id,
+                    ),
+                )
+                await cursor.execute(
                     queries.CREATE_INDEX_QUERY.format(
                         self.table_name,
                         self.table_name,
@@ -164,7 +170,6 @@ class AiopgResultBackend(BasePostgresResultBackend):
                 ),
                 (
                     task_id,
-                    dumped_progress,
                     dumped_progress,
                 ),
             )
