@@ -171,6 +171,7 @@ class AiopgResultBackend(BasePostgresResultBackend):
                 (
                     task_id,
                     dumped_progress,
+                    dumped_progress,
                 ),
             )
 

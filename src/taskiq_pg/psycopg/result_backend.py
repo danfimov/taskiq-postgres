@@ -156,6 +156,7 @@ class PsycopgResultBackend(BasePostgresResultBackend):
                 params=[
                     task_id,
                     self.serializer.dumpb(model_dump(progress)),
+                    self.serializer.dumpb(model_dump(progress)),
                 ],
             )
 
