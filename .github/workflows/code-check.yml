@@ -2,8 +2,14 @@ name: Tests
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
 
 permissions:
   actions: read
@@ -17,10 +23,11 @@ jobs:
     strategy:
       matrix:
         python-version: [ "3.10", "3.11", "3.12", "3.13", "3.14" ]
+        postgres-version: [ "16", "17", "18" ]
       fail-fast: true
     services:
      postgres:
-       image: postgres:18
+       image: postgres:${{ matrix.postgres-version }}
        env:
          POSTGRES_USER: taskiq_postgres
          POSTGRES_PASSWORD: look_in_vault
