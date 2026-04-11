@@ -20,6 +20,7 @@ class BasePostgresScheduleSource(ScheduleSource, DsnHelper, abc.ABC):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         table_name: str = "taskiq_schedules",
+        keep_schedules: bool = False,
         **connect_kwargs: tp.Any,
     ) -> None:
         """
@@ -34,12 +35,15 @@ class BasePostgresScheduleSource(ScheduleSource, DsnHelper, abc.ABC):
             table_name: Name of the table to store scheduled tasks. Will be created automatically if it doesn't exist.
             broker: The TaskIQ broker instance to use for finding and managing tasks.
                 Required if startup_schedule is provided.
+            keep_schedules: Whether or not to keep schedules created on previous run.
+                If False (default), the schedules table is refreshed from schedules declared in broker tasks on startup.
             **connect_kwargs: Additional keyword arguments passed to the database connection pool.
         """
-        self._broker: tp.Final = broker
-        self._dsn: tp.Final = dsn
-        self._table_name: tp.Final = table_name
-        self._connect_kwargs: tp.Final = connect_kwargs
+        self._broker: tp.Final[AsyncBroker] = broker
+        self._dsn: tp.Final[str | tp.Callable[[], str]] = dsn
+        self._table_name: tp.Final[str] = table_name
+        self._connect_kwargs: tp.Final[tp.Any] = connect_kwargs
+        self._keep_schedules: tp.Final[bool] = keep_schedules
 
     def extract_scheduled_tasks_from_broker(self) -> list[ScheduledTask]:
         """

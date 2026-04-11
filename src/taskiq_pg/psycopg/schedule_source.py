@@ -31,6 +31,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = ...,
         table_name: str = ...,
+        keep_schedules: bool = ...,
         *,
         pool: None = ...,
         **connect_kwargs: tp.Any,
@@ -42,6 +43,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = ...,
         table_name: str = ...,
+        keep_schedules: bool = ...,
         *,
         pool: AsyncConnectionPool,
     ) -> None: ...
@@ -51,6 +53,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         table_name: str = "taskiq_schedules",
+        keep_schedules: bool = False,
         *,
         pool: AsyncConnectionPool | None = None,
         **connect_kwargs: tp.Any,
@@ -62,9 +65,9 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
             broker: The TaskIQ broker instance.
             dsn: PostgreSQL connection string or callable. Ignored in pool mode.
             table_name: Table to store schedules in.
+            keep_schedules: Whether or not to keep schedules created on previous run.
             pool: An existing connection pool to reuse.
             **connect_kwargs: Extra kwargs for connection pool creation.
-
         """
         self._owns_pool = True
         if pool is not None:
@@ -75,6 +78,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
             broker=broker,
             dsn=dsn,
             table_name=table_name,
+            keep_schedules=keep_schedules,
             **connect_kwargs,
         )
 
@@ -118,8 +122,11 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
             await cursor.execute(
                 sql.SQL(CREATE_SCHEDULES_TABLE_QUERY).format(sql.Identifier(self._table_name)),
             )
-        scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
-        await self._update_schedules_on_startup(scheduled_tasks_for_creation)
+
+        if not self._keep_schedules:
+            logger.debug("Refreshing schedules table")
+            scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
+            await self._update_schedules_on_startup(scheduled_tasks_for_creation)
 
     async def shutdown(self) -> None:
         """Close the connection pool (only if owned by this source)."""
