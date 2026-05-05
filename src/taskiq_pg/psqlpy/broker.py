@@ -40,8 +40,8 @@ class MessageRow:
 class PSQLPyBroker(BasePostgresBroker):
     """Broker that uses PostgreSQL and PSQLPy with LISTEN/NOTIFY."""
 
-    _read_conn: psqlpy.Connection | None = None
-    _write_pool: psqlpy.ConnectionPool | None = None
+    _read_conn: psqlpy.Connection
+    _write_pool: psqlpy.ConnectionPool
     _listener: psqlpy.Listener
     _queue: asyncio.Queue
     _owns_write_pool: bool
@@ -165,13 +165,13 @@ class PSQLPyBroker(BasePostgresBroker):
         """Initialize the broker."""
         await super().startup()
 
-        if not self._read_conn:
+        if self._owns_read_conn:
             self._read_conn = await psqlpy.connect(
                 dsn=self.dsn,
                 **self.read_kwargs,
             )
 
-        if not self._write_pool:
+        if self._owns_write_pool:
             self._write_pool = psqlpy.ConnectionPool(
                 dsn=self.dsn,
                 **self.write_kwargs,
@@ -224,7 +224,7 @@ class PSQLPyBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
-        async with self._write_pool.acquire() as conn:  # type: ignore[union-attr]
+        async with self._write_pool.acquire() as conn:
             # insert message into db table
             message_inserted_id = tp.cast(
                 "int",
@@ -254,7 +254,7 @@ class PSQLPyBroker(BasePostgresBroker):
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
         await asyncio.sleep(delay_seconds)
-        async with self._write_pool.acquire() as conn:  # type: ignore[union-attr]
+        async with self._write_pool.acquire() as conn:
             # Send NOTIFY with message ID as payload
             _ = await conn.execute(f"NOTIFY {self.channel_name}, '{message_id}'")
 
@@ -271,7 +271,7 @@ class PSQLPyBroker(BasePostgresBroker):
                 payload = await self._queue.get()
                 message_id = int(payload)  # payload is the message id
                 try:
-                    async with self._write_pool.acquire() as conn:  # type: ignore[union-attr]
+                    async with self._write_pool.acquire() as conn:
                         claimed_message = await conn.fetch_row(
                             CLAIM_MESSAGE_QUERY.format(self.table_name),
                             [message_id],
@@ -285,7 +285,7 @@ class PSQLPyBroker(BasePostgresBroker):
                 message_data = message_row_result.message.encode()
 
                 async def ack(*, _message_id: int = message_id) -> None:
-                    async with self._write_pool.acquire() as conn:  # type: ignore[union-attr]
+                    async with self._write_pool.acquire() as conn:
                         _ = await conn.execute(
                             DELETE_MESSAGE_QUERY.format(self.table_name),
                             [_message_id],

@@ -27,8 +27,8 @@ _T = tp.TypeVar("_T")
 class PsycopgBroker(BasePostgresBroker):
     """Broker that uses PostgreSQL and psycopg with LISTEN/NOTIFY."""
 
-    _read_conn: AsyncConnection | None = None
-    _write_pool: AsyncConnectionPool | None = None
+    _read_conn: AsyncConnection
+    _write_pool: AsyncConnectionPool
     _notifies_iter: tp.AsyncIterator[tp.Any]
     _owns_write_pool: bool
     _owns_read_conn: bool
@@ -151,7 +151,7 @@ class PsycopgBroker(BasePostgresBroker):
         """Initialize the broker."""
         await super().startup()
 
-        if not self._read_conn:
+        if self._owns_read_conn:
             self._read_conn = await AsyncConnection.connect(
                 conninfo=self.dsn,
                 **self.read_kwargs,
@@ -159,7 +159,7 @@ class PsycopgBroker(BasePostgresBroker):
                 cursor_factory=AsyncRawCursor,
             )
 
-        if not self._write_pool:
+        if self._owns_write_pool:
             self._write_pool = AsyncConnectionPool(
                 conninfo=self.dsn if self.dsn is not None else "",
                 open=False,
@@ -194,7 +194,7 @@ class PsycopgBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
-        async with self._write_pool.connection() as connection, connection.cursor() as cursor:  # type: ignore[union-attr]
+        async with self._write_pool.connection() as connection, connection.cursor() as cursor:
             # insert message into db table
             await cursor.execute(
                 sql.SQL(INSERT_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
@@ -227,7 +227,7 @@ class PsycopgBroker(BasePostgresBroker):
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
         await asyncio.sleep(delay_seconds)
-        async with self._write_pool.connection() as connection, connection.cursor() as cursor:  # type: ignore[union-attr]
+        async with self._write_pool.connection() as connection, connection.cursor() as cursor:
             # Send NOTIFY with message ID as payload
             await cursor.execute(
                 sql.SQL("NOTIFY {}, {}").format(
@@ -252,7 +252,7 @@ class PsycopgBroker(BasePostgresBroker):
             async for message_id_str in self._listen_context():
                 message_id = int(message_id_str)  # payload is the message id
                 try:
-                    async with self._write_pool.connection() as connection, connection.cursor() as cursor:  # type: ignore[union-attr]
+                    async with self._write_pool.connection() as connection, connection.cursor() as cursor:
                         await cursor.execute(
                             sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
                             [message_id],
@@ -269,7 +269,7 @@ class PsycopgBroker(BasePostgresBroker):
                 message_data = message_str.encode()
 
                 async def ack(*, _message_id: int = message_id) -> None:
-                    async with self._write_pool.connection() as connection, connection.cursor() as cursor:  # type: ignore[union-attr]
+                    async with self._write_pool.connection() as connection, connection.cursor() as cursor:
                         await cursor.execute(
                             sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
                             [_message_id],
