@@ -2,6 +2,7 @@ import typing as tp
 
 from aiopg import Pool, create_pool
 from taskiq import TaskiqResult
+from taskiq.abc.serializer import TaskiqSerializer
 from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg import exceptions
@@ -13,19 +14,82 @@ class AiopgResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on Aiopg."""
 
     _database_pool: Pool
+    _owns_pool: bool
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = ...,
+        keep_results: bool = ...,
+        table_name: str = ...,
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = ...,
+        serializer: TaskiqSerializer | None = ...,
+        *,
+        pool: None = ...,
+        **connect_kwargs: tp.Any,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = ...,
+        keep_results: bool = ...,
+        table_name: str = ...,
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = ...,
+        serializer: TaskiqSerializer | None = ...,
+        *,
+        pool: Pool,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = "postgres://postgres:postgres@localhost:5432/postgres",
+        keep_results: bool = True,
+        table_name: str = "taskiq_results",
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = "VarChar",
+        serializer: TaskiqSerializer | None = None,
+        *,
+        pool: Pool | None = None,
+        **connect_kwargs: tp.Any,
+    ) -> None:
+        """
+        Construct a new AiopgResultBackend.
+
+        Args:
+            dsn: PostgreSQL connection string or callable. Must be ``None`` in pool mode.
+            keep_results: Whether to keep results after reading.
+            table_name: Table to store results in.
+            field_for_task_id: Column type for task_id.
+            serializer: Serializer for task results.
+            pool: An existing connection pool to reuse.
+            **connect_kwargs: Extra kwargs for connection pool creation.
+        """
+        self._owns_pool = True
+        if pool is not None:
+            self._owns_pool = False
+            self._database_pool = pool
+
+        super().__init__(
+            dsn=dsn,
+            keep_results=keep_results,
+            table_name=table_name,
+            field_for_task_id=field_for_task_id,
+            serializer=serializer,
+            **connect_kwargs,
+        )
 
     async def startup(self) -> None:
         """
         Initialize the result backend.
 
-        Construct new connection pool
-        and create new table for results if not exists.
+        Construct new connection pool (if not provided externally) and create new table for results if not exists.
         """
         try:
-            self._database_pool = await create_pool(
-                self.dsn,
-                **self.connect_kwargs,
-            )
+            if self._owns_pool:
+                self._database_pool = await create_pool(
+                    self.dsn,
+                    **self.connect_kwargs,
+                )
 
             async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
                 await cursor.execute(
@@ -50,8 +114,8 @@ class AiopgResultBackend(BasePostgresResultBackend):
             raise exceptions.DatabaseConnectionError(str(error)) from error
 
     async def shutdown(self) -> None:
-        """Close the connection pool."""
-        if getattr(self, "_database_pool", None) is not None:
+        """Close the connection pool if created by this backend."""
+        if self._owns_pool and getattr(self, "_database_pool", None) is not None:
             self._database_pool.close()
 
     async def set_result(

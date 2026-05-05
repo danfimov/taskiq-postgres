@@ -1,12 +1,11 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
 import typing as tp
+from collections.abc import AsyncGenerator, Callable
 
 import asyncpg
-from taskiq import AckableMessage, BrokerMessage
+from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg.asyncpg.queries import (
@@ -17,29 +16,147 @@ from taskiq_pg.asyncpg.queries import (
 )
 
 
-if tp.TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-
 logger = logging.getLogger("taskiq.asyncpg_broker")
+
+_T = tp.TypeVar("_T")
 
 
 class AsyncpgBroker(BasePostgresBroker):
     """Broker that uses asyncpg as driver and PostgreSQL with LISTEN/NOTIFY mechanism."""
 
-    _read_conn: asyncpg.Connection[asyncpg.Record] | None = None
-    _write_pool: asyncpg.pool.Pool[asyncpg.Record] | None = None
+    _read_conn: asyncpg.Connection | None = None
+    _write_pool: asyncpg.pool.Pool | None = None
+    _owns_write_pool: bool
+    _owns_read_conn: bool
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: str | Callable[[], str] = ...,
+        result_backend: AsyncResultBackend[_T] | None = ...,
+        task_id_generator: Callable[[], str] | None = ...,
+        channel_name: str = ...,
+        table_name: str = ...,
+        max_retry_attempts: int = ...,
+        read_kwargs: dict[str, tp.Any] | None = ...,
+        write_kwargs: dict[str, tp.Any] | None = ...,
+        *,
+        write_pool: None = ...,
+        read_connection: None = ...,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: str | Callable[[], str] = ...,
+        result_backend: AsyncResultBackend[_T] | None = ...,
+        task_id_generator: Callable[[], str] | None = ...,
+        channel_name: str = ...,
+        table_name: str = ...,
+        max_retry_attempts: int = ...,
+        read_kwargs: dict[str, tp.Any] | None = ...,
+        write_kwargs: dict[str, tp.Any] | None = ...,
+        *,
+        write_pool: asyncpg.pool.Pool,
+        read_connection: None = ...,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: str | Callable[[], str] = ...,
+        result_backend: AsyncResultBackend[_T] | None = ...,
+        task_id_generator: Callable[[], str] | None = ...,
+        channel_name: str = ...,
+        table_name: str = ...,
+        max_retry_attempts: int = ...,
+        read_kwargs: dict[str, tp.Any] | None = ...,
+        write_kwargs: dict[str, tp.Any] | None = ...,
+        *,
+        write_pool: None = ...,
+        read_connection: asyncpg.Connection,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: str | Callable[[], str] = ...,
+        result_backend: AsyncResultBackend[_T] | None = ...,
+        task_id_generator: Callable[[], str] | None = ...,
+        channel_name: str = ...,
+        table_name: str = ...,
+        max_retry_attempts: int = ...,
+        read_kwargs: dict[str, tp.Any] | None = ...,
+        write_kwargs: dict[str, tp.Any] | None = ...,
+        *,
+        write_pool: asyncpg.pool.Pool,
+        read_connection: asyncpg.Connection,
+    ) -> None: ...
+
+    def __init__(  # noqa: PLR0913
+        self,
+        dsn: str | Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
+        result_backend: AsyncResultBackend[_T] | None = None,
+        task_id_generator: Callable[[], str] | None = None,
+        channel_name: str = "taskiq",
+        table_name: str = "taskiq_messages",
+        max_retry_attempts: int = 5,
+        read_kwargs: dict[str, tp.Any] | None = None,
+        write_kwargs: dict[str, tp.Any] | None = None,
+        *,
+        write_pool: asyncpg.pool.Pool | None = None,
+        read_connection: asyncpg.Connection | None = None,
+    ) -> None:
+        """
+        Construct a new AsyncpgBroker.
+
+        Args:
+            dsn: PostgreSQL connection string or a callable returning one.
+            result_backend: Custom result backend.
+            task_id_generator: Custom task_id generator.
+            channel_name: Name of the LISTEN/NOTIFY channel.
+            table_name: Name of the table used to store messages.
+            max_retry_attempts: Maximum number of message processing attempts.
+            read_kwargs: Extra kwargs forwarded to `asyncpg.connect()`.
+            write_kwargs: Extra kwargs forwarded to `asyncpg.create_pool()`.
+            write_pool: An existing connection pool to reuse for writes.
+            read_connection: An existing connection pool to reuse for LISTEN.
+        """
+        super().__init__(
+            dsn=dsn,
+            result_backend=result_backend,
+            task_id_generator=task_id_generator,
+            channel_name=channel_name,
+            table_name=table_name,
+            max_retry_attempts=max_retry_attempts,
+            read_kwargs=read_kwargs,
+            write_kwargs=write_kwargs,
+        )
+
+        self._owns_write_pool = True
+        if write_pool is not None:
+            self._write_pool = write_pool
+            self._owns_write_pool = False
+
+        self._owns_read_conn = True
+        if read_connection is not None:
+            self._read_conn = read_connection
+            self._owns_read_conn = False
 
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
 
-        self._read_conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
-        self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
+        if not self._read_conn:
+            self._read_conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
+
+        if not self._write_pool:
+            self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
 
         if self._read_conn is None:
-            msg = "_read_conn not initialized"
-            raise RuntimeError(msg)
+            raise RuntimeError("Read connection is not initialized")
+        if self._write_pool is None:
+            raise RuntimeError("Write pool is not initialized")
 
         async with self._write_pool.acquire() as conn:
             await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
@@ -52,13 +169,14 @@ class AsyncpgBroker(BasePostgresBroker):
         await super().shutdown()
         if self._read_conn is not None:
             await self._read_conn.remove_listener(self.channel_name, self._notification_handler)
-            await self._read_conn.close()
-        if self._write_pool is not None:
+            if self._owns_read_conn:
+                await self._read_conn.close()
+        if self._write_pool is not None and self._owns_write_pool:
             await self._write_pool.close()
 
     def _notification_handler(
         self,
-        con_ref: asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record],  # noqa: ARG002
+        con_ref: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # noqa: ARG002
         pid: int,  # noqa: ARG002
         channel: str,
         payload: object,

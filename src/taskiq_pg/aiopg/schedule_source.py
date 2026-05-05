@@ -1,7 +1,8 @@
+import typing as tp
 from logging import getLogger
 
 from aiopg import Pool, create_pool
-from taskiq import ScheduledTask
+from taskiq import AsyncBroker, ScheduledTask
 
 from taskiq_pg import exceptions
 from taskiq_pg._internal import BasePostgresScheduleSource
@@ -21,6 +22,59 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
     """Schedule source that uses aiopg to store schedules in PostgreSQL."""
 
     _database_pool: Pool
+    _owns_pool: bool
+
+    @tp.overload
+    def __init__(
+        self,
+        broker: AsyncBroker,
+        dsn: str | tp.Callable[[], str] = ...,
+        table_name: str = ...,
+        *,
+        pool: None = ...,
+        **connect_kwargs: tp.Any,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        broker: AsyncBroker,
+        dsn: str | tp.Callable[[], str] = ...,
+        table_name: str = ...,
+        *,
+        pool: Pool,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        broker: AsyncBroker,
+        dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
+        table_name: str = "taskiq_schedules",
+        *,
+        pool: Pool | None = None,
+        **connect_kwargs: tp.Any,
+    ) -> None:
+        """
+        Construct a new AiopgScheduleSource.
+
+        Args:
+            broker: The TaskIQ broker instance.
+            dsn: PostgreSQL connection string or callable. Ignored in pool mode.
+            table_name: Table to store schedules in.
+            pool: An existing connection pool to reuse.
+            **connect_kwargs: Extra kwargs for connection pool creation.
+        """
+        self._owns_pool = True
+        if pool is not None:
+            self._owns_pool = False
+            self._database_pool = pool
+
+        super().__init__(
+            broker=broker,
+            dsn=dsn,
+            table_name=table_name,
+            **connect_kwargs,
+        )
 
     async def _update_schedules_on_startup(self, schedules: list[ScheduledTask]) -> None:
         """Update schedules in the database on startup: truncate table and insert new ones."""
@@ -42,14 +96,15 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         """
         Initialize the schedule source.
 
-        Construct new connection pool, create new table for schedules if not exists
+        Construct new connection pool (if not provided externally), create new table for schedules if not exists
         and fill table with schedules from task labels.
         """
         try:
-            self._database_pool = await create_pool(
-                dsn=self.dsn,
-                **self._connect_kwargs,
-            )
+            if self._owns_pool:
+                self._database_pool = await create_pool(
+                    dsn=self.dsn,
+                    **self._connect_kwargs,
+                )
             async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
                 await cursor.execute(CREATE_SCHEDULES_TABLE_QUERY.format(self._table_name))
             scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
@@ -58,11 +113,11 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             raise exceptions.DatabaseConnectionError(str(error)) from error
 
     async def shutdown(self) -> None:
-        """Close the connection pool."""
-        if getattr(self, "_database_pool", None) is not None:
+        """Close the connection pool if it was created by this schedule source."""
+        if self._owns_pool and getattr(self, "_database_pool", None) is not None:
             self._database_pool.close()
 
-    async def get_schedules(self) -> list["ScheduledTask"]:
+    async def get_schedules(self) -> list[ScheduledTask]:
         """Fetch schedules from the database."""
         async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
             await cursor.execute(
@@ -87,7 +142,7 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             )
         return schedules
 
-    async def add_schedule(self, schedule: "ScheduledTask") -> None:
+    async def add_schedule(self, schedule: ScheduledTask) -> None:
         """
         Add a new schedule.
 

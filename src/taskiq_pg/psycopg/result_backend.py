@@ -3,6 +3,7 @@ import typing as tp
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 from taskiq import TaskiqResult
+from taskiq.abc.serializer import TaskiqSerializer
 from taskiq.compat import model_dump, model_validate
 from taskiq.depends.progress_tracker import TaskProgress
 
@@ -15,20 +16,85 @@ class PsycopgResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on psycopg."""
 
     _database_pool: AsyncConnectionPool
+    _owns_pool: bool
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = ...,
+        keep_results: bool = ...,
+        table_name: str = ...,
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = ...,
+        serializer: TaskiqSerializer | None = ...,
+        *,
+        pool: None = ...,
+        **connect_kwargs: tp.Any,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = ...,
+        keep_results: bool = ...,
+        table_name: str = ...,
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = ...,
+        serializer: TaskiqSerializer | None = ...,
+        *,
+        pool: AsyncConnectionPool,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = "postgres://postgres:postgres@localhost:5432/postgres",
+        keep_results: bool = True,
+        table_name: str = "taskiq_results",
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = "VarChar",
+        serializer: TaskiqSerializer | None = None,
+        *,
+        pool: AsyncConnectionPool | None = None,
+        **connect_kwargs: tp.Any,
+    ) -> None:
+        """
+        Construct a new PsycopgResultBackend.
+
+        Args:
+            dsn: PostgreSQL connection string or callable. Must be ``None`` in pool mode.
+            keep_results: Whether to keep results after reading.
+            table_name: Table to store results in.
+            field_for_task_id: Column type for task_id.
+            serializer: Serializer for task results.
+            pool: An existing connection pool to reuse.
+            **connect_kwargs: Extra kwargs for connection pool creation.
+        """
+        self._owns_pool = True
+        if pool is not None:
+            self._owns_pool = False
+            self._database_pool = pool
+
+        super().__init__(
+            dsn=dsn,
+            keep_results=keep_results,
+            table_name=table_name,
+            field_for_task_id=field_for_task_id,
+            serializer=serializer,
+            **connect_kwargs,
+        )
 
     async def startup(self) -> None:
         """
         Initialize the result backend.
 
-        Construct new connection pool
-        and create new table for results if not exists.
+        Construct new connection pool (if not provided externally) and create new table
+        for results if not exists.
         """
-        self._database_pool = AsyncConnectionPool(
-            conninfo=self.dsn if self.dsn is not None else "",
-            open=False,
-            **self.connect_kwargs,
-        )
-        await self._database_pool.open()
+        if self._owns_pool:
+            self._database_pool = AsyncConnectionPool(
+                conninfo=self.dsn if self.dsn is not None else "",
+                open=False,
+                **self.connect_kwargs,
+            )
+            await self._database_pool.open()
+
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(
                 query=sql.SQL(queries.CREATE_TABLE_QUERY).format(
@@ -49,8 +115,8 @@ class PsycopgResultBackend(BasePostgresResultBackend):
             )
 
     async def shutdown(self) -> None:
-        """Close the connection pool."""
-        if getattr(self, "_database_pool", None) is not None:
+        """Close the connection pool (only if owned by this backend)."""
+        if self._owns_pool and getattr(self, "_database_pool", None) is not None:
             await self._database_pool.close()
 
     async def set_result(

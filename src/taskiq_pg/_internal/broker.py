@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import abc
 import typing as tp
 
@@ -16,7 +14,7 @@ _T = tp.TypeVar("_T")
 class BasePostgresBroker(AsyncBroker, abc.ABC):
     """Base class for Postgres brokers."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         result_backend: AsyncResultBackend[_T] | None = None,
@@ -39,7 +37,6 @@ class BasePostgresBroker(AsyncBroker, abc.ABC):
             max_retry_attempts: Maximum number of message processing attempts.
             read_kwargs: Additional arguments for read connection creation.
             write_kwargs: Additional arguments for write pool creation.
-
         """
         super().__init__(
             result_backend=result_backend,
