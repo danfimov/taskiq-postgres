@@ -108,7 +108,7 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
         Construct new connection pool (if not provided externally), create new table for
         schedules if not exists and fill table with schedules from task labels.
         """
-        if not self._database_pool:
+        if self._owns_pool:
             self._database_pool = ConnectionPool(
                 dsn=self.dsn,
                 **self._connect_kwargs,

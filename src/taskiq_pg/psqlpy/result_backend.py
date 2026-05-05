@@ -86,7 +86,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
 
         Construct new connection pool (if not provided externally) and create new table for results if not exists.
         """
-        if not self._database_pool:
+        if self._owns_pool:
             self._database_pool = ConnectionPool(
                 dsn=self.dsn,
                 **self.connect_kwargs,
