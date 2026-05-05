@@ -58,7 +58,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         Construct a new PSQLPyResultBackend.
 
         Args:
-            dsn: PostgreSQL connection string or callable. Must be ``None`` in pool mode.
+            dsn: PostgreSQL connection string or callable. Can be None if pool is provided.
             keep_results: Whether to keep results after reading.
             table_name: Table to store results in.
             field_for_task_id: Column type for task_id.
@@ -111,7 +111,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
         )
 
     async def shutdown(self) -> None:
-        """Close the connection pool if it was creaated by this result backend."""
+        """Close the connection pool if it was created by this result backend."""
         if self._owns_pool and getattr(self, "_database_pool", None) is not None:
             self._database_pool.close()
 

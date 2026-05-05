@@ -120,7 +120,7 @@ class AsyncpgBroker(BasePostgresBroker):
             read_kwargs: Extra kwargs forwarded to `asyncpg.connect()`.
             write_kwargs: Extra kwargs forwarded to `asyncpg.create_pool()`.
             write_pool: An existing connection pool to reuse for writes.
-            read_connection: An existing connection pool to reuse for LISTEN.
+            read_connection: An existing connection to reuse for LISTEN.
         """
         super().__init__(
             dsn=dsn,

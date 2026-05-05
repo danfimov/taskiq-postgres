@@ -58,7 +58,7 @@ class PsycopgResultBackend(BasePostgresResultBackend):
         Construct a new PsycopgResultBackend.
 
         Args:
-            dsn: PostgreSQL connection string or callable. Must be ``None`` in pool mode.
+            dsn: PostgreSQL connection string or callable. Can be None if pool is provided.
             keep_results: Whether to keep results after reading.
             table_name: Table to store results in.
             field_for_task_id: Column type for task_id.
