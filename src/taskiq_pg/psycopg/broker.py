@@ -179,9 +179,8 @@ class PsycopgBroker(BasePostgresBroker):
         if self._notifies_iter is not None:
             with suppress(RuntimeError):  # RuntimeError: aclose(): asynchronous generator is already running
                 await self._notifies_iter.aclose()  # type: ignore[attr-defined]
-        if self._read_conn is not None:
-            await self._read_conn.notifies().aclose()
-            if self._owns_read_conn:
+        if self._read_conn is not None and self._owns_read_conn:
+                await self._read_conn.notifies().aclose()
                 await self._read_conn.close()
         if self._write_pool is not None and self._owns_write_pool:
             await self._write_pool.close()
