@@ -110,6 +110,8 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
                 open=False,
                 **self._connect_kwargs,
             )
+
+        if self._database_pool.closed:
             await self._database_pool.open()
 
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:

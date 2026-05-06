@@ -165,6 +165,8 @@ class PsycopgBroker(BasePostgresBroker):
                 open=False,
                 **self.write_kwargs,
             )
+
+        if self._write_pool.closed:
             await self._write_pool.open()
 
         async with self._write_pool.connection() as connection, connection.cursor() as cursor:
