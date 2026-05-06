@@ -1,9 +1,10 @@
+import typing as tp
 import uuid
 from logging import getLogger
 
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
-from taskiq import ScheduledTask
+from taskiq import AsyncBroker, ScheduledTask
 
 from taskiq_pg._internal import BasePostgresScheduleSource
 from taskiq_pg.psycopg.queries import (
@@ -21,7 +22,61 @@ logger = getLogger("taskiq_pg.psycopg_schedule_source")
 class PsycopgScheduleSource(BasePostgresScheduleSource):
     """Schedule source that uses psycopg to store schedules in PostgreSQL."""
 
-    _database_pool: AsyncConnectionPool
+    _database_pool: "AsyncConnectionPool"
+    _owns_pool: bool
+
+    @tp.overload
+    def __init__(
+        self,
+        broker: AsyncBroker,
+        dsn: str | tp.Callable[[], str] = ...,
+        table_name: str = ...,
+        *,
+        pool: None = ...,
+        **connect_kwargs: tp.Any,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        broker: AsyncBroker,
+        dsn: str | tp.Callable[[], str] = ...,
+        table_name: str = ...,
+        *,
+        pool: AsyncConnectionPool,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        broker: AsyncBroker,
+        dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
+        table_name: str = "taskiq_schedules",
+        *,
+        pool: AsyncConnectionPool | None = None,
+        **connect_kwargs: tp.Any,
+    ) -> None:
+        """
+        Construct a new PsycopgScheduleSource.
+
+        Args:
+            broker: The TaskIQ broker instance.
+            dsn: PostgreSQL connection string or callable. Ignored in pool mode.
+            table_name: Table to store schedules in.
+            pool: An existing connection pool to reuse.
+            **connect_kwargs: Extra kwargs for connection pool creation.
+
+        """
+        self._owns_pool = True
+        if pool is not None:
+            self._owns_pool = False
+            self._database_pool = pool
+
+        super().__init__(
+            broker=broker,
+            dsn=dsn,
+            table_name=table_name,
+            **connect_kwargs,
+        )
 
     async def _update_schedules_on_startup(self, schedules: list[ScheduledTask]) -> None:
         """Update schedules in the database on startup: truncate table and insert new ones."""
@@ -46,15 +101,18 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
         """
         Initialize the schedule source.
 
-        Construct new connection pool, create new table for schedules if not exists
-        and fill table with schedules from task labels.
+        Construct new connection pool (if not provided externally), create new table for
+        schedules if not exists and fill table with schedules from task labels.
         """
-        self._database_pool = AsyncConnectionPool(
-            conninfo=self.dsn if self.dsn is not None else "",
-            open=False,
-            **self._connect_kwargs,
-        )
-        await self._database_pool.open()
+        if self._owns_pool:
+            self._database_pool = AsyncConnectionPool(
+                conninfo=self.dsn if self.dsn is not None else "",
+                open=False,
+                **self._connect_kwargs,
+            )
+
+        if self._database_pool.closed:
+            await self._database_pool.open()
 
         async with self._database_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(
@@ -64,8 +122,8 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
         await self._update_schedules_on_startup(scheduled_tasks_for_creation)
 
     async def shutdown(self) -> None:
-        """Close the connection pool."""
-        if getattr(self, "_database_pool", None) is not None:
+        """Close the connection pool (only if owned by this source)."""
+        if self._owns_pool and getattr(self, "_database_pool", None) is not None:
             await self._database_pool.close()
 
     async def get_schedules(self) -> list["ScheduledTask"]:
@@ -110,7 +168,7 @@ class PsycopgScheduleSource(BasePostgresScheduleSource):
                     schedule.model_dump_json(
                         exclude={"schedule_id", "task_name"},
                     ),
-                ]
+                ],
             )
 
     async def delete_schedule(self, schedule_id: str) -> None:

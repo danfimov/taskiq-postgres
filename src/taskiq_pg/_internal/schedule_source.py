@@ -1,16 +1,11 @@
-from __future__ import annotations
-
 import typing as tp
 import uuid
 from logging import getLogger
 
 from pydantic import ValidationError
 from taskiq import ScheduleSource
+from taskiq.abc.broker import AsyncBroker
 from taskiq.scheduler.scheduled_task import ScheduledTask
-
-
-if tp.TYPE_CHECKING:
-    from taskiq.abc.broker import AsyncBroker
 
 
 logger = getLogger("taskiq_pg")
@@ -37,7 +32,6 @@ class BasePostgresScheduleSource(ScheduleSource):
             broker: The TaskIQ broker instance to use for finding and managing tasks.
                 Required if startup_schedule is provided.
             **connect_kwargs: Additional keyword arguments passed to the database connection pool.
-
         """
         self._broker: tp.Final = broker
         self._dsn: tp.Final = dsn

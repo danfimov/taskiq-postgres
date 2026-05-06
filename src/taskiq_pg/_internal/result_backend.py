@@ -31,7 +31,6 @@ class BasePostgresResultBackend(AsyncResultBackend[ReturnType], abc.ABC):
             field_for_task_id: type of the field to store task_id.
             serializer: serializer class to serialize/deserialize result from task.
             connect_kwargs: additional arguments for creating connection pool.
-
         """
         self._dsn: tp.Final = dsn
         self.keep_results: tp.Final = keep_results

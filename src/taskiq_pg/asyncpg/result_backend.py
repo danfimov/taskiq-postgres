@@ -2,6 +2,7 @@ import typing as tp
 
 import asyncpg
 from taskiq import TaskiqResult
+from taskiq.abc.serializer import TaskiqSerializer
 from taskiq.compat import model_dump, model_validate
 from taskiq.depends.progress_tracker import TaskProgress
 
@@ -13,18 +14,83 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
     """Result backend for TaskIQ based on asyncpg."""
 
     _database_pool: "asyncpg.Pool[tp.Any]"
+    _owns_pool: bool
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = ...,
+        keep_results: bool = ...,
+        table_name: str = ...,
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = ...,
+        serializer: TaskiqSerializer | None = ...,
+        *,
+        pool: None = ...,
+        **connect_kwargs: tp.Any,
+    ) -> None: ...
+
+    @tp.overload
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = ...,
+        keep_results: bool = ...,
+        table_name: str = ...,
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = ...,
+        serializer: TaskiqSerializer | None = ...,
+        *,
+        pool: "asyncpg.Pool[tp.Any]",
+    ) -> None: ...
+
+    def __init__(
+        self,
+        dsn: tp.Callable[[], str] | str | None = "postgres://postgres:postgres@localhost:5432/postgres",
+        keep_results: bool = True,
+        table_name: str = "taskiq_results",
+        field_for_task_id: tp.Literal["VarChar", "Text", "Uuid"] = "VarChar",
+        serializer: TaskiqSerializer | None = None,
+        *,
+        pool: "asyncpg.Pool[tp.Any] | None" = None,
+        **connect_kwargs: tp.Any,
+    ) -> None:
+        """
+        Construct a new AsyncpgResultBackend.
+
+        Args:
+            dsn: PostgreSQL connection string or callable. Can be None if pool is provided.
+            keep_results: Whether to keep results after reading.
+            table_name: Table to store results in.
+            field_for_task_id: Column type for task_id.
+            serializer: Serializer for task results.
+            pool: An existing connection pool to reuse.
+            **connect_kwargs: Extra kwargs for connection pool creation.
+        """
+        self._owns_pool = True
+        if pool is not None:
+            self._owns_pool = False
+            self._database_pool = pool
+
+        super().__init__(
+            dsn=dsn,
+            keep_results=keep_results,
+            table_name=table_name,
+            field_for_task_id=field_for_task_id,
+            serializer=serializer,
+            **connect_kwargs,
+        )
 
     async def startup(self) -> None:
         """
         Initialize the result backend.
 
-        Construct new connection pool and create new table for results if not exists.
+        Construct new connection pool (if not provided externally) and create new table
+        for results if not exists.
         """
-        _database_pool = await asyncpg.create_pool(
-            dsn=self.dsn,
-            **self.connect_kwargs,
-        )
-        self._database_pool = _database_pool
+        if self._owns_pool:
+            _database_pool = await asyncpg.create_pool(
+                dsn=self.dsn,
+                **self.connect_kwargs,
+            )
+            self._database_pool = _database_pool
 
         await self._database_pool.execute(
             queries.CREATE_TABLE_QUERY.format(
@@ -45,8 +111,8 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         )
 
     async def shutdown(self) -> None:
-        """Close the connection pool."""
-        if getattr(self, "_database_pool", None) is not None:
+        """Close the connection pool if it was created by this backend."""
+        if self._owns_pool and getattr(self, "_database_pool", None) is not None:
             await self._database_pool.close()
 
     async def set_result(
