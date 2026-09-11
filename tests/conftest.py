@@ -1,8 +1,7 @@
-import pytest
 import uvloop
 
 
-@pytest.fixture(scope="session")
-def event_loop_policy():
-    # Read for more details: https://pytest-asyncio.readthedocs.io/en/stable/how-to-guides/uvloop.html
-    return uvloop.EventLoopPolicy()
+def pytest_asyncio_loop_factories(config, item):  # noqa: ARG001
+    return {
+        "uvloop": uvloop.new_event_loop,
+    }
