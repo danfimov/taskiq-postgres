@@ -1,3 +1,4 @@
+import logging
 import typing as tp
 
 import asyncpg
@@ -8,9 +9,13 @@ from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
 from taskiq_pg.asyncpg import queries
+from taskiq_pg.asyncpg.utils import AsyncpgDsnHelper
 
 
-class AsyncpgResultBackend(BasePostgresResultBackend):
+logger = logging.getLogger("taskiq.asyncpg_result_backend")
+
+
+class AsyncpgResultBackend(BasePostgresResultBackend, AsyncpgDsnHelper):
     """Result backend for TaskIQ based on asyncpg."""
 
     _database_pool: "asyncpg.Pool[tp.Any]"
