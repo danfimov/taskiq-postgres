@@ -13,12 +13,13 @@ from taskiq_pg.asyncpg.queries import (
     INSERT_SCHEDULE_QUERY,
     SELECT_SCHEDULES_QUERY,
 )
+from taskiq_pg.asyncpg.utils import AsyncpgDsnHelper
 
 
 logger = getLogger("taskiq_pg.asyncpg_schedule_source")
 
 
-class AsyncpgScheduleSource(BasePostgresScheduleSource):
+class AsyncpgScheduleSource(BasePostgresScheduleSource, AsyncpgDsnHelper):
     """Schedule source that uses asyncpg to store schedules in PostgreSQL."""
 
     _database_pool: "asyncpg.Pool[asyncpg.Record]"

@@ -14,6 +14,7 @@ from taskiq_pg.asyncpg.queries import (
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
+from taskiq_pg.asyncpg.utils import AsyncpgDsnHelper
 
 
 logger = logging.getLogger("taskiq.asyncpg_broker")
@@ -21,7 +22,7 @@ logger = logging.getLogger("taskiq.asyncpg_broker")
 _T = tp.TypeVar("_T")
 
 
-class AsyncpgBroker(BasePostgresBroker):
+class AsyncpgBroker(BasePostgresBroker, AsyncpgDsnHelper):
     """Broker that uses asyncpg as driver and PostgreSQL with LISTEN/NOTIFY mechanism."""
 
     _read_conn: asyncpg.Connection | None = None

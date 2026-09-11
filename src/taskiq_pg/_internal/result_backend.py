@@ -5,11 +5,13 @@ from taskiq import AsyncResultBackend
 from taskiq.abc.serializer import TaskiqSerializer
 from taskiq.serializers import PickleSerializer
 
+from taskiq_pg._internal.utils import DsnHelper
+
 
 ReturnType = tp.TypeVar("ReturnType")
 
 
-class BasePostgresResultBackend(AsyncResultBackend[ReturnType], abc.ABC):
+class BasePostgresResultBackend(AsyncResultBackend[ReturnType], DsnHelper, abc.ABC):
     """Base class for PostgreSQL result backends."""
 
     def __init__(
@@ -38,14 +40,3 @@ class BasePostgresResultBackend(AsyncResultBackend[ReturnType], abc.ABC):
         self.field_for_task_id: tp.Final = field_for_task_id
         self.connect_kwargs: tp.Final = connect_kwargs
         self.serializer = serializer or PickleSerializer()
-
-    @property
-    def dsn(self) -> str | None:
-        """
-        Get the DSN string.
-
-        Returns the DSN string or None if not set.
-        """
-        if callable(self._dsn):
-            return self._dsn()
-        return self._dsn
