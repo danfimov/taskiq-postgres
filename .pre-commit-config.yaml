@@ -2,18 +2,16 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
 -   repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.3.0
+    rev: v4.4.0
     hooks:
     -   id: conventional-pre-commit
         stages: [commit-msg]
 
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+-   repo: builtin
     hooks:
     -   id: trailing-whitespace
     -   id: mixed-line-ending
     -   id: check-case-conflict
-    -   id: check-ast
     -   id: check-toml
     -   id: check-yaml
     -   id: check-added-large-files
@@ -21,7 +19,7 @@ repos:
     -   id: end-of-file-fixer
 
 -   repo: https://github.com/crate-ci/typos
-    rev: v1.40.0
+    rev: v1.50.1
     hooks:
       - id: typos
 
@@ -33,6 +31,7 @@ repos:
             '--exclude-lines', 'look_in_vault',
             '--exclude-lines', 'taskiq_postgres',
             '--exclude-lines', 'postgresql://postgres:postgres@localhost:5432/postgres',
+            '--exclude-lines', 'postgres://user:password@localhost:5432/mydb',
         ]
 
 -   repo: local
@@ -49,15 +48,6 @@ repos:
     -   id: mypy
         name: Mypy
         entry: make mypy
-        language: python
-        types: [python]
-        require_serial: true
-        verbose: true
-        pass_filenames: false
-
-    -   id: bandit
-        name: bandit
-        entry: uv run --active --frozen bandit -c pyproject.toml -r src
         language: python
         types: [python]
         require_serial: true

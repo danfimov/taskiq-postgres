@@ -26,9 +26,7 @@ body:
       label: Python version
       description: What version of Python are you using?
       options:
-        - Python 3.9 or lower
-        - Python 3.10
-        - Python 3.11
+        - Python 3.11 or lower
         - Python 3.12
         - Python 3.13
         - Python 3.14
