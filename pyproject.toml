@@ -101,6 +101,10 @@ markers = [
     "unit: marks unit tests",
     "integration: marks tests with real infrastructure env",
 ]
+filterwarnings = [
+    # psqlpy upstream shutdown problem
+    "ignore:coroutine 'PSQLPyBroker._notification_handler' was never awaited:RuntimeWarning",
+]
 
 [tool.coverage.report]
 exclude_lines = [

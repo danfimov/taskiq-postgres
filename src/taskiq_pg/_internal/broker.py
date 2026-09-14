@@ -3,6 +3,8 @@ import typing as tp
 
 from taskiq import AsyncBroker, AsyncResultBackend
 
+from taskiq_pg._internal.utils import DsnHelper
+
 
 if tp.TYPE_CHECKING:
     import asyncio
@@ -11,7 +13,7 @@ if tp.TYPE_CHECKING:
 _T = tp.TypeVar("_T")
 
 
-class BasePostgresBroker(AsyncBroker, abc.ABC):
+class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
     """Base class for Postgres brokers."""
 
     def __init__(
@@ -49,16 +51,3 @@ class BasePostgresBroker(AsyncBroker, abc.ABC):
         self.write_kwargs: dict[str, tp.Any] = write_kwargs or {}
         self.max_retry_attempts: int = max_retry_attempts
         self._queue: asyncio.Queue[str] | None = None
-
-    @property
-    def dsn(self) -> str:
-        """
-        Get the DSN string.
-
-        Returns:
-            A string with dsn or None if dsn isn't set yet.
-
-        """
-        if callable(self._dsn):
-            return self._dsn()
-        return self._dsn

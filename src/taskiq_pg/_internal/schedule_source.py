@@ -1,3 +1,4 @@
+import abc
 import typing as tp
 import uuid
 from logging import getLogger
@@ -7,11 +8,13 @@ from taskiq import ScheduleSource
 from taskiq.abc.broker import AsyncBroker
 from taskiq.scheduler.scheduled_task import ScheduledTask
 
+from taskiq_pg._internal.utils import DsnHelper
+
 
 logger = getLogger("taskiq_pg")
 
 
-class BasePostgresScheduleSource(ScheduleSource):
+class BasePostgresScheduleSource(ScheduleSource, DsnHelper, abc.ABC):
     def __init__(
         self,
         broker: AsyncBroker,
@@ -37,17 +40,6 @@ class BasePostgresScheduleSource(ScheduleSource):
         self._dsn: tp.Final = dsn
         self._table_name: tp.Final = table_name
         self._connect_kwargs: tp.Final = connect_kwargs
-
-    @property
-    def dsn(self) -> str | None:
-        """
-        Get the DSN string.
-
-        Returns the DSN string or None if not set.
-        """
-        if callable(self._dsn):
-            return self._dsn()
-        return self._dsn
 
     def extract_scheduled_tasks_from_broker(self) -> list[ScheduledTask]:
         """
