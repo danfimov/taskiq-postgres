@@ -31,7 +31,7 @@ init: ## Install all project dependencies with extras
 
 .PHONY: run_docs
 run_docs: ## Run documentation server
-	@uv run mkdocs serve --livereload
+	@uv run zensical serve
 
 .PHONY: run_infra
 run_infra: ## Run rabbitmq in docker for integration tests
