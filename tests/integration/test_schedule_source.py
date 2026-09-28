@@ -130,7 +130,7 @@ async def test_when_labels_contain_schedules__then_get_schedules_returns_schedul
     # Then
     assert len(schedules) == 3
     assert {item.cron for item in schedules} == {"*/10 * * * *", "0 1 * * *", None}
-    assert {item.cron_offset for item in schedules} == {None, "Europe/Berlin", "PT1H"}
+    assert {item.cron_offset for item in schedules} == {None, "Europe/Berlin", timedelta(hours=1)}
     assert {item.task_name for item in schedules} == {"tests:one_schedule", "tests:two_schedules"}
     assert {item.time for item in schedules} == {datetime(2024, 1, 1, 12, 0, 0), None}
     assert all(item.schedule_id is not None for item in schedules)

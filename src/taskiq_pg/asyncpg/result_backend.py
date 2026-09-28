@@ -4,7 +4,6 @@ import typing as tp
 import asyncpg
 from taskiq import TaskiqResult
 from taskiq.abc.serializer import TaskiqSerializer
-from taskiq.compat import model_dump, model_validate
 from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
@@ -135,7 +134,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
                 self.table_name,
             ),
             task_id,
-            self.serializer.dumpb(model_dump(result)),
+            self.serializer.dumpb(result.model_dump(mode="json")),
         )
 
     async def is_result_ready(self, task_id: str) -> bool:
@@ -184,8 +183,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
                 ),
                 task_id,
             )
-        taskiq_result: tp.Final = model_validate(
-            TaskiqResult[ReturnType],
+        taskiq_result: tp.Final = TaskiqResult[ReturnType].model_validate(
             self.serializer.loadb(result_in_bytes),
         )
         if not with_logs:
@@ -208,7 +206,7 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
                 self.table_name,
             ),
             task_id,
-            self.serializer.dumpb(model_dump(progress)),
+            self.serializer.dumpb(progress.model_dump(mode="json")),
         )
 
     async def get_progress(
@@ -228,7 +226,6 @@ class AsyncpgResultBackend(BasePostgresResultBackend):
         )
         if progress_in_bytes is None:
             return None
-        return model_validate(
-            TaskProgress[tp.Any],
+        return TaskProgress[tp.Any].model_validate(
             self.serializer.loadb(progress_in_bytes),
         )
