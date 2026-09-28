@@ -4,7 +4,6 @@ from psqlpy import ConnectionPool
 from psqlpy.exceptions import BaseConnectionError
 from taskiq import TaskiqResult
 from taskiq.abc.serializer import TaskiqSerializer
-from taskiq.compat import model_dump, model_validate
 from taskiq.depends.progress_tracker import TaskProgress
 
 from taskiq_pg._internal.result_backend import BasePostgresResultBackend, ReturnType
@@ -133,7 +132,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
             ),
             parameters=[
                 task_id,
-                self.serializer.dumpb(model_dump(result)),
+                self.serializer.dumpb(result.model_dump(mode="json")),
             ],
         )
 
@@ -189,8 +188,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
                 parameters=[task_id],
             )
 
-        taskiq_result: tp.Final = model_validate(
-            TaskiqResult[ReturnType],
+        taskiq_result: tp.Final = TaskiqResult[ReturnType].model_validate(
             self.serializer.loadb(result_in_bytes),
         )
 
@@ -217,7 +215,7 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
             ),
             parameters=[
                 task_id,
-                self.serializer.dumpb(model_dump(progress)),
+                self.serializer.dumpb(progress.model_dump(mode="json")),
             ],
         )
 
@@ -243,7 +241,6 @@ class PSQLPyResultBackend(BasePostgresResultBackend):
             raise ResultIsMissingError(msg) from exc
         if progress_in_bytes is None:
             return None
-        return model_validate(
-            TaskProgress[tp.Any],
+        return TaskProgress[tp.Any].model_validate(
             self.serializer.loadb(progress_in_bytes),
         )
