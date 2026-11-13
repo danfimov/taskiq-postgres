@@ -3,6 +3,7 @@ import json
 import logging
 import typing as tp
 from collections.abc import AsyncGenerator, Callable
+from contextlib import suppress
 
 import asyncpg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
@@ -28,6 +29,8 @@ class AsyncpgBroker(BasePostgresBroker):
     _write_pool: asyncpg.pool.Pool | None = None
     _owns_write_pool: bool
     _owns_read_conn: bool
+    _listener_task: asyncio.Task[None] | None = None
+    _listener_disconnected: asyncio.Event
 
     @tp.overload
     def __init__(
@@ -121,6 +124,7 @@ class AsyncpgBroker(BasePostgresBroker):
             write_kwargs: Extra kwargs forwarded to `asyncpg.create_pool()`.
             write_pool: An existing connection pool to reuse for writes.
             read_connection: An existing connection to reuse for LISTEN.
+                Its lifecycle, including reconnection, remains the caller's responsibility.
         """
         super().__init__(
             dsn=dsn,
@@ -145,34 +149,85 @@ class AsyncpgBroker(BasePostgresBroker):
 
     async def startup(self) -> None:
         """Initialize the broker."""
+        if self._listener_task is not None and not self._listener_task.done():
+            return
         await super().startup()
-
-        if not self._read_conn:
-            self._read_conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
-
-        if not self._write_pool:
-            self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
-
-        if self._read_conn is None:
-            raise RuntimeError("Read connection is not initialized")
-        if self._write_pool is None:
-            raise RuntimeError("Write pool is not initialized")
-
-        async with self._write_pool.acquire() as conn:
-            await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
-
-        await self._read_conn.add_listener(self.channel_name, self._notification_handler)
         self._queue = asyncio.Queue()
+        self._listener_disconnected = asyncio.Event()
+        try:
+            if self._write_pool is None:
+                self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
+            async with self._write_pool.acquire() as conn:
+                await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+            await self._connect_listener()
+            self._listener_task = asyncio.create_task(self._restore_listener())
+        except BaseException:
+            await self.shutdown()
+            raise
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
-        await super().shutdown()
-        if self._read_conn is not None:
-            await self._read_conn.remove_listener(self.channel_name, self._notification_handler)
+        if self._listener_task is not None:
+            self._listener_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._listener_task
+            self._listener_task = None
+        try:
+            await super().shutdown()
+        finally:
+            if self._read_conn is not None:
+                self._read_conn.remove_termination_listener(self._connection_terminated)
+                if not self._read_conn.is_closed():
+                    await self._read_conn.remove_listener(self.channel_name, self._notification_handler)
+                if self._owns_read_conn:
+                    await self._read_conn.close()
+                    self._read_conn = None
+            if self._write_pool is not None and self._owns_write_pool:
+                await self._write_pool.close()
+                self._write_pool = None
+
+    async def _connect_listener(self) -> None:
+        """Restore LISTEN, creating and cleaning up broker-owned connections as needed."""
+        self._listener_disconnected.clear()
+        conn = self._read_conn
+        if conn is None or (self._owns_read_conn and conn.is_closed()):
+            conn = await asyncpg.connect(self.dsn, **self.read_kwargs)
+        conn.add_termination_listener(self._connection_terminated)
+        try:
+            await conn.add_listener(self.channel_name, self._notification_handler)
+        except BaseException:
+            conn.remove_termination_listener(self._connection_terminated)
             if self._owns_read_conn:
-                await self._read_conn.close()
-        if self._write_pool is not None and self._owns_write_pool:
-            await self._write_pool.close()
+                conn.terminate()
+                self._read_conn = None
+            raise
+        self._read_conn = conn
+        if self._owns_read_conn and conn.is_closed():
+            self._listener_disconnected.set()
+
+    def _connection_terminated(
+        self,
+        conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    ) -> None:
+        """Notify the background task when the current LISTEN connection closes."""
+        if self._owns_read_conn and conn is self._read_conn:
+            self._listener_disconnected.set()
+
+    async def _restore_listener(self) -> None:
+        """Restore LISTEN after disconnection with retry delays from one to 30 seconds."""
+        while True:
+            await self._listener_disconnected.wait()
+            delay = 1.0
+            while True:
+                try:
+                    await self._connect_listener()
+                except (OSError, asyncio.TimeoutError, asyncpg.PostgresError, asyncpg.InterfaceError):  # noqa: PERF203
+                    logger.warning("LISTEN reconnect failed; retrying in %s seconds", delay, exc_info=True)
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30.0)
+                else:
+                    logger.info("LISTEN connection restored on channel %s", self.channel_name)
+                    break
 
     def _notification_handler(
         self,
