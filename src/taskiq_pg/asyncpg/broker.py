@@ -167,24 +167,26 @@ class AsyncpgBroker(BasePostgresBroker):
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
-        if self._listener_task is not None:
-            self._listener_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._listener_task
-            self._listener_task = None
         try:
-            await super().shutdown()
+            if self._listener_task is not None:
+                self._listener_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._listener_task
         finally:
-            if self._read_conn is not None:
-                self._read_conn.remove_termination_listener(self._connection_terminated)
-                if not self._read_conn.is_closed():
-                    await self._read_conn.remove_listener(self.channel_name, self._notification_handler)
-                if self._owns_read_conn:
-                    await self._read_conn.close()
-                    self._read_conn = None
-            if self._write_pool is not None and self._owns_write_pool:
-                await self._write_pool.close()
-                self._write_pool = None
+            self._listener_task = None
+            try:
+                await super().shutdown()
+            finally:
+                if self._read_conn is not None:
+                    self._read_conn.remove_termination_listener(self._connection_terminated)
+                    if not self._read_conn.is_closed():
+                        await self._read_conn.remove_listener(self.channel_name, self._notification_handler)
+                    if self._owns_read_conn:
+                        await self._read_conn.close()
+                        self._read_conn = None
+                if self._write_pool is not None and self._owns_write_pool:
+                    await self._write_pool.close()
+                    self._write_pool = None
 
     async def _connect_listener(self) -> None:
         """Restore LISTEN, creating and cleaning up broker-owned connections as needed."""
