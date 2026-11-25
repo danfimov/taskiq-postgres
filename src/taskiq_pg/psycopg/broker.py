@@ -58,6 +58,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: None = ...,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -76,6 +77,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: None = ...,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -94,6 +96,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: AsyncConnection,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -112,6 +115,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: AsyncConnection,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     def __init__(  # noqa: PLR0913
@@ -129,6 +133,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: AsyncConnection | None = None,
         listen_keepalive_interval: float | None = 30.0,
         listen_keepalive_timeout: float = 5.0,
+        poll_interval: float = 5.0,
     ) -> None:
         """
         Construct a new PsycopgBroker.
@@ -148,6 +153,7 @@ class PsycopgBroker(BasePostgresBroker):
             listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
                 with a query; None disables the check.
             listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
+            poll_interval: How often, in seconds, to look for pending messages whose NOTIFY was missed.
         """
         super().__init__(
             dsn=dsn,
@@ -160,6 +166,7 @@ class PsycopgBroker(BasePostgresBroker):
             write_kwargs=write_kwargs,
             listen_keepalive_interval=listen_keepalive_interval,
             listen_keepalive_timeout=listen_keepalive_timeout,
+            poll_interval=poll_interval,
         )
 
         self._owns_write_pool = True

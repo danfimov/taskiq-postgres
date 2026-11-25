@@ -7,6 +7,7 @@ import asyncpg
 import pytest
 from taskiq import BrokerMessage
 
+from taskiq_pg._internal.broker import POLL_NOW
 from taskiq_pg.asyncpg import AsyncpgBroker
 
 
@@ -144,7 +145,10 @@ async def test_listener_recovers_when_resubscription_fails(
             queue = broker._queue  # noqa: SLF001
             assert queue is not None
             await connection.execute(f"NOTIFY {broker.channel_name}, '42'")
-            assert await asyncio.wait_for(queue.get(), timeout=5) == "42"
+            payload = await asyncio.wait_for(queue.get(), timeout=5)
+            while payload == POLL_NOW:  # reconnecting also asks the worker to poll the table
+                payload = await asyncio.wait_for(queue.get(), timeout=5)
+            assert payload == "42"
         assert len(failed_connections) == 1
         assert failed_connections[0].is_closed()
     finally:
