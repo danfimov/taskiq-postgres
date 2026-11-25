@@ -9,6 +9,7 @@ import asyncpg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg.asyncpg.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -206,17 +207,17 @@ class AsyncpgBroker(BasePostgresBroker):
             self._listener_disconnected.set()
 
     async def _restore_listener(self) -> None:
-        """Restore LISTEN after disconnection with retry delays from one to 30 seconds."""
+        """Restore LISTEN after disconnection, retrying with randomized delays of up to 30 seconds."""
         while True:
             await self._listener_disconnected.wait()
-            delay = 1.0
+            delays = retry_delays()
             while True:
                 try:
                     await self._connect_listener()
                 except Exception:  # noqa: PERF203
-                    logger.warning("LISTEN reconnect failed; retrying in %s seconds", delay, exc_info=True)
+                    delay = next(delays)
+                    logger.warning("LISTEN reconnect failed; retrying in %.1f seconds", delay, exc_info=True)
                     await asyncio.sleep(delay)
-                    delay = min(delay * 2, 30.0)
                 else:
                     logger.info("LISTEN connection restored on channel %s", self.channel_name)
                     break
