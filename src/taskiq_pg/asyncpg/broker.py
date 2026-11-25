@@ -207,7 +207,7 @@ class AsyncpgBroker(BasePostgresBroker):
             self._listener_disconnected.set()
 
     async def _restore_listener(self) -> None:
-        """Restore LISTEN after disconnection with retry delays from one to 30 seconds."""
+        """Restore LISTEN after disconnection, retrying with randomized delays of up to 30 seconds."""
         while True:
             await self._listener_disconnected.wait()
             delays = retry_delays()
@@ -216,7 +216,7 @@ class AsyncpgBroker(BasePostgresBroker):
                     await self._connect_listener()
                 except Exception:  # noqa: PERF203
                     delay = next(delays)
-                    logger.warning("LISTEN reconnect failed; retrying in %s seconds", delay, exc_info=True)
+                    logger.warning("LISTEN reconnect failed; retrying in %.1f seconds", delay, exc_info=True)
                     await asyncio.sleep(delay)
                 else:
                     logger.info("LISTEN connection restored on channel %s", self.channel_name)
