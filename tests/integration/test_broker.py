@@ -139,3 +139,38 @@ async def test_when_two_workers_listen__then_single_message_processed_once(
         ),
     )
     assert cnt == 0, "Запись должна быть удалена после ack"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "broker",
+    [
+        AsyncpgBroker,
+        PSQLPyBroker,
+        PsycopgBroker,
+    ],
+    indirect=True,
+)
+async def test_when_delayed_message_was_published__then_worker_received_message(
+    broker,
+) -> None:
+    # given
+    message: BrokerMessage = BrokerMessage(
+        task_id=uuid.uuid4().hex,
+        task_name="example:delayed_task",
+        message=b'{"hello":"later"}',
+        labels={"delay": 1},
+    )
+    listener = broker.listen()
+    task: asyncio.Task = asyncio.create_task(listener.__anext__())
+
+    try:
+        # when
+        await broker.kick(message)
+        done, _ = await asyncio.wait({task}, timeout=5.0)
+
+        # then
+        assert task in done, "Worker should receive delayed message"
+        assert task.result().data == message.message
+    finally:
+        task.cancel()
