@@ -195,3 +195,56 @@ async def test_when_broker_starts__then_pending_index_is_created(
         assert "WHERE (status = 'pending'::text)" in definition
     finally:
         await broker.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("broker_class", BROKERS)
+async def test_when_pending_rows_have_malformed_delay_labels__then_polling_still_claims_messages(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    broker_class: type[Broker],
+) -> None:
+    # given
+    names = unique_names()
+    table = names["table_name"]
+    broker = broker_class(dsn=pg_dsn, poll_interval=0.2, **names)
+    await broker.startup()
+    await insert_pending(connection, table, '{"label":"text"}', {"delay": "abc"})
+    await insert_pending(connection, table, '{"label":"negative"}', {"delay": "-3"})
+    await insert_pending(connection, table, '{"label":"huge"}', {"delay": "9" * 400})
+    await insert_pending(connection, table, '{"label":"none"}', {})
+    listener = broker.listen()
+    try:
+        # when
+        received = await take(listener, 3, timeout=5)
+
+        # then
+        assert received == [b'{"label":"text"}', b'{"label":"negative"}', b'{"label":"none"}']
+        pending = await connection.fetchval(f"SELECT message FROM {table} WHERE status = 'pending'")  # noqa: S608
+        assert pending == '{"label":"huge"}'
+    finally:
+        await listener.aclose()
+        await broker.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("broker_class", BROKERS)
+async def test_when_delay_label_is_malformed__then_kick_fails_without_inserting_the_message(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    broker_class: type[Broker],
+) -> None:
+    # given
+    names = unique_names()
+    broker = broker_class(dsn=pg_dsn, **names)
+    await broker.startup()
+    message = BrokerMessage(task_id=uuid.uuid4().hex, task_name="example:bad", message=b"{}", labels={"delay": "abc"})
+    try:
+        # when
+        with pytest.raises(ValueError, match="invalid literal"):
+            await broker.kick(message)
+
+        # then
+        assert await connection.fetchval(f"SELECT count(*) FROM {names['table_name']}") == 0  # noqa: S608
+    finally:
+        await broker.shutdown()

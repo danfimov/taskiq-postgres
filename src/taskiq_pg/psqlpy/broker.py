@@ -246,6 +246,10 @@ class PSQLPyBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
+        # Parse the delay before inserting, so a malformed label does not leave a message behind.
+        delay_value = message.labels.get("delay")
+        delay_seconds = None if delay_value is None else int(delay_value)
+
         async with self._write_pool.acquire() as conn:
             # insert message into db table
             message_inserted_id = tp.cast(
@@ -261,9 +265,7 @@ class PSQLPyBroker(BasePostgresBroker):
                 ),
             )
 
-            delay_value = tp.cast("str | None", message.labels.get("delay"))
-            if delay_value is not None:
-                delay_seconds = int(delay_value)
+            if delay_seconds is not None:
                 asyncio.create_task(  # noqa: RUF006
                     self._schedule_notification(message_inserted_id, delay_seconds),
                 )

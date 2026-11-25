@@ -308,6 +308,10 @@ class AiopgBroker(BasePostgresBroker):
             msg = "Please run startup before kicking."
             raise ValueError(msg)
 
+        # Parse the delay before inserting, so a malformed label does not leave a message behind.
+        delay_value = message.labels.get("delay")
+        delay_seconds = None if delay_value is None else int(delay_value)
+
         async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
             await cursor.execute(
                 INSERT_MESSAGE_QUERY.format(self.table_name),
@@ -319,13 +323,12 @@ class AiopgBroker(BasePostgresBroker):
                 raise RuntimeError(msg)
             message_id = int(row[0])
 
-            delay_value = message.labels.get("delay")
-            if delay_value is None:
+            if delay_seconds is None:
                 # Send a NOTIFY with the message ID as payload
                 await cursor.execute(f"NOTIFY {self.channel_name}, %s", (str(message_id),))
                 return
 
-        task = asyncio.create_task(self._schedule_notification(message_id, int(delay_value)))
+        task = asyncio.create_task(self._schedule_notification(message_id, delay_seconds))
         self._notify_tasks.add(task)
         task.add_done_callback(self._notify_tasks.discard)
 

@@ -325,6 +325,10 @@ class AsyncpgBroker(BasePostgresBroker):
             msg = "Please run startup before kicking."
             raise ValueError(msg)
 
+        # Parse the delay before inserting, so a malformed label does not leave a message behind.
+        delay_value = message.labels.get("delay")
+        delay_seconds = None if delay_value is None else int(delay_value)
+
         async with self._write_pool.acquire() as conn:
             # Insert the message into the database
             message_inserted_id = tp.cast(
@@ -338,9 +342,7 @@ class AsyncpgBroker(BasePostgresBroker):
                 ),
             )
 
-            delay_value = message.labels.get("delay")
-            if delay_value is not None:
-                delay_seconds = int(delay_value)
+            if delay_seconds is not None:
                 _ = asyncio.create_task(  # noqa: RUF006
                     self._schedule_notification(message_inserted_id, delay_seconds),
                 )

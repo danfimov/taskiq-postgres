@@ -297,6 +297,10 @@ class PsycopgBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
+        # Parse the delay before inserting, so a malformed label does not leave a message behind.
+        delay_value = message.labels.get("delay")
+        delay_seconds = None if delay_value is None else int(delay_value)
+
         async with self._write_pool.connection() as connection, connection.cursor() as cursor:
             # insert message into db table
             await cursor.execute(
@@ -314,8 +318,7 @@ class PsycopgBroker(BasePostgresBroker):
                 raise RuntimeError(msg)
             message_inserted_id = int(row[0])
 
-            delay_value = tp.cast("str | None", message.labels.get("delay"))
-            if delay_value is None:
+            if delay_seconds is None:
                 # Send NOTIFY with message ID as payload
                 await cursor.execute(
                     sql.SQL("NOTIFY {}, {}").format(
@@ -329,7 +332,7 @@ class PsycopgBroker(BasePostgresBroker):
         # so a delayed NOTIFY sent from here never reaches a worker before the row is visible.
         # The NOTIFY is only the fast path: workers also poll for messages whose delay has elapsed,
         # so the message is delivered even if this producer exits before sending it.
-        task = asyncio.create_task(self._schedule_notification(message_inserted_id, int(delay_value)))
+        task = asyncio.create_task(self._schedule_notification(message_inserted_id, delay_seconds))
         self._notify_tasks.add(task)
         task.add_done_callback(self._notify_tasks.discard)
 
