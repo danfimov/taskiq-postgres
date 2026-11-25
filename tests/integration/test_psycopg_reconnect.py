@@ -89,3 +89,70 @@ async def test_when_supplied_read_connection_was_terminated__then_error_is_raise
         await asyncio.gather(task, return_exceptions=True)
         await broker.shutdown()
         await read_connection.close()
+
+
+@pytest.mark.integration
+async def test_when_broker_is_shut_down_while_listening__then_listener_stops_without_reconnecting(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+) -> None:
+    # given
+    channel = f"reconnect_{uuid.uuid4().hex}"
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel)
+    await broker.startup()
+    listener = broker.listen()
+    task: asyncio.Task[tp.Any] = asyncio.create_task(listener.__anext__())
+    await asyncio.sleep(0.2)
+
+    # when
+    await broker.shutdown()
+    done, _ = await asyncio.wait({task}, timeout=5.0)
+
+    # then
+    assert task in done, "listen() should end after shutdown()"
+    assert isinstance(task.exception(), StopAsyncIteration)
+    await asyncio.sleep(0.5)
+    assert not await listen_backends(connection, channel), "No LISTEN connection should be left after shutdown()"
+
+
+@pytest.mark.integration
+async def test_when_broker_is_shut_down_during_reconnect__then_reconnect_stops(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # given
+    channel = f"reconnect_{uuid.uuid4().hex}"
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel)
+    await broker.startup()
+    attempts = 0
+
+    async def unavailable() -> None:
+        """Fail every reconnect attempt."""
+        nonlocal attempts
+        attempts += 1
+        msg = "database is unavailable"
+        raise psycopg.OperationalError(msg)
+
+    monkeypatch.setattr(broker, "_connect_listener", unavailable)
+    listener = broker.listen()
+    task: asyncio.Task[tp.Any] = asyncio.create_task(listener.__anext__())
+    original = await listen_backends(connection, channel)
+    await connection.execute("SELECT pg_terminate_backend(pid) FROM unnest($1::int[]) AS pid", list(original))
+
+    async def first_attempt() -> None:
+        while not attempts:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(first_attempt(), timeout=5)
+
+    # when
+    await broker.shutdown()
+    done, _ = await asyncio.wait({task}, timeout=5.0)
+
+    # then
+    assert task in done, "listen() should end after shutdown()"
+    assert isinstance(task.exception(), StopAsyncIteration)
+    attempts_after_shutdown = attempts
+    await asyncio.sleep(1.5)
+    assert attempts == attempts_after_shutdown, "No reconnect attempts should be made after shutdown()"

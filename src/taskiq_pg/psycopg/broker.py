@@ -33,6 +33,7 @@ class PsycopgBroker(BasePostgresBroker):
     _notifies_iter: tp.AsyncIterator[tp.Any]
     _owns_write_pool: bool
     _owns_read_conn: bool
+    _closing: bool = False
 
     @tp.overload
     def __init__(
@@ -152,6 +153,7 @@ class PsycopgBroker(BasePostgresBroker):
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
+        self._closing = False
 
         if self._owns_write_pool:
             self._write_pool = AsyncConnectionPool(
@@ -188,11 +190,15 @@ class PsycopgBroker(BasePostgresBroker):
         self._read_conn = conn
         self._notifies_iter = conn.notifies()
 
-    async def _restore_listener(self) -> None:
-        """Reconnect the broker-owned LISTEN connection, retrying with randomized delays of up to 30 seconds."""
+    async def _restore_listener(self) -> bool:
+        """
+        Reconnect the broker-owned LISTEN connection, retrying with randomized delays of up to 30 seconds.
+
+        Returns False without reconnecting when the broker is shutting down.
+        """
         await self._read_conn.close()
         delays = retry_delays()
-        while True:
+        while not self._is_closing():
             try:
                 await self._connect_listener()
             except Exception:  # noqa: PERF203
@@ -200,11 +206,25 @@ class PsycopgBroker(BasePostgresBroker):
                 logger.warning("LISTEN reconnect failed; retrying in %.1f seconds", delay, exc_info=True)
                 await asyncio.sleep(delay)
             else:
+                if self._is_closing():  # shutdown() ran while connecting and could not close this connection
+                    await self._read_conn.close()
+                    return False
                 logger.info("LISTEN connection restored on channel %s", self.channel_name)
-                return
+                return True
+        return False
+
+    def _is_closing(self) -> bool:
+        """
+        Tell whether shutdown() has started.
+
+        A method rather than an attribute check, so that type checkers do not assume
+        the flag stays the same across awaits.
+        """
+        return self._closing
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
+        self._closing = True
         await super().shutdown()
         if self._notifies_iter is not None:
             with suppress(RuntimeError):  # RuntimeError: aclose(): asynchronous generator is already running
@@ -273,10 +293,13 @@ class PsycopgBroker(BasePostgresBroker):
                 async for notify in self._notifies_iter:
                     yield notify.payload
             except psycopg.OperationalError:  # noqa: PERF203
+                if self._closing:  # the connection was closed by shutdown()
+                    return
                 if not self._owns_read_conn:
                     raise
                 logger.warning("LISTEN connection lost on channel %s; reconnecting", self.channel_name, exc_info=True)
-                await self._restore_listener()
+                if not await self._restore_listener():
+                    return
             else:
                 return
 
@@ -288,31 +311,30 @@ class PsycopgBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
-        while True:
-            async for message_id_str in self._listen_context():
-                message_id = int(message_id_str)  # payload is the message id
-                try:
-                    async with self._write_pool.connection() as connection, connection.cursor() as cursor:
-                        await cursor.execute(
-                            sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                            [message_id],
-                        )
-                        claimed_message = await cursor.fetchone()
-                        if claimed_message is None:
-                            continue
-                except psycopg.OperationalError:  # message was claimed by another worker
-                    continue
-                message_str = claimed_message[3]
-                if not isinstance(message_str, str):
-                    msg = "Message is not a string"
-                    raise TypeError(msg)
-                message_data = message_str.encode()
+        async for message_id_str in self._listen_context():
+            message_id = int(message_id_str)  # payload is the message id
+            try:
+                async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                    await cursor.execute(
+                        sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
+                        [message_id],
+                    )
+                    claimed_message = await cursor.fetchone()
+                    if claimed_message is None:
+                        continue
+            except psycopg.OperationalError:  # message was claimed by another worker
+                continue
+            message_str = claimed_message[3]
+            if not isinstance(message_str, str):
+                msg = "Message is not a string"
+                raise TypeError(msg)
+            message_data = message_str.encode()
 
-                async def ack(*, _message_id: int = message_id) -> None:
-                    async with self._write_pool.connection() as connection, connection.cursor() as cursor:
-                        await cursor.execute(
-                            sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                            [_message_id],
-                        )
+            async def ack(*, _message_id: int = message_id) -> None:
+                async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                    await cursor.execute(
+                        sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
+                        [_message_id],
+                    )
 
-                yield AckableMessage(data=message_data, ack=ack)
+            yield AckableMessage(data=message_data, ack=ack)
