@@ -149,8 +149,6 @@ class AsyncpgBroker(BasePostgresBroker):
 
     async def startup(self) -> None:
         """Initialize the broker."""
-        if self._listener_task is not None and not self._listener_task.done():
-            return
         await super().startup()
         self._queue = asyncio.Queue()
         self._listener_disconnected = asyncio.Event()
