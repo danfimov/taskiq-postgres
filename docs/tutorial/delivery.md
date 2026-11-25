@@ -13,7 +13,7 @@ worker fails, and which broker parameters control that.
    only if it is still `pending`, so exactly one worker gets it.
 3. When the task is done, the worker acknowledges the message, and the row is deleted.
 
-A message with a `delay` label is inserted right away, but becomes available only after its delay.
+A message with a `delay` label (in seconds) is inserted right away, but becomes available only after its delay.
 
 `NOTIFY` is fast but not reliable: PostgreSQL drops a notification nobody is listening to. To make sure no message
 is left behind, every listening worker also **polls** the table:
@@ -78,6 +78,9 @@ row stays in the table for you to inspect.
 
     - make tasks idempotent;
     - make the timeout longer than your longest task, otherwise a task that is still running is delivered again.
+
+    When a worker acknowledges a message after it was delivered again, the acknowledgement is ignored: the row is
+    deleted only by the worker that claimed it last.
 
 ## Parameters
 
