@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator, Callable
 import aiopg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.aiopg.queries import (
@@ -181,10 +181,18 @@ class AiopgBroker(BasePostgresBroker):
         if self._write_pool is None:
             self._write_pool = await aiopg.create_pool(self.dsn, **self.write_kwargs)
         async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
-            await cursor.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
-            await cursor.execute(
-                CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
-            )
+            # aiopg connections are always in autocommit mode, so the transaction is explicit.
+            await cursor.execute("BEGIN")
+            try:
+                await cursor.execute(schema_lock_query(self.table_name))
+                await cursor.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+                await cursor.execute(
+                    CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
+                )
+            except BaseException:
+                await cursor.execute("ROLLBACK")
+                raise
+            await cursor.execute("COMMIT")
         if self._owns_read_conn:
             self._read_conn = await self._connect_listener()
         elif self._read_conn is not None:

@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator, Callable
 import asyncpg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.asyncpg.queries import (
@@ -179,7 +179,8 @@ class AsyncpgBroker(BasePostgresBroker):
         self._listener_disconnected = asyncio.Event()
         if self._write_pool is None:
             self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
-        async with self._write_pool.acquire() as conn:
+        async with self._write_pool.acquire() as conn, conn.transaction():
+            await conn.execute(schema_lock_query(self.table_name))
             await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
             await conn.execute(
                 CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),

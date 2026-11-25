@@ -10,7 +10,7 @@ from psycopg import AsyncConnection, AsyncRawCursor, sql
 from psycopg_pool import AsyncConnectionPool
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.psycopg.queries import (
@@ -199,7 +199,12 @@ class PsycopgBroker(BasePostgresBroker):
         if self._write_pool.closed:
             await self._write_pool.open()
 
-        async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+        async with (
+            self._write_pool.connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(schema_lock_query(self.table_name))
             await cursor.execute(sql.SQL(CREATE_MESSAGE_TABLE_QUERY).format(sql.Identifier(self.table_name)))
             await cursor.execute(
                 sql.SQL(CREATE_PENDING_INDEX_QUERY).format(

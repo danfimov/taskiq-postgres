@@ -1,4 +1,5 @@
 import abc
+import hashlib
 import typing as tp
 
 from taskiq import AsyncBroker, AsyncResultBackend
@@ -82,3 +83,14 @@ LISTEN_KEEPALIVE_QUERY = "SELECT 1 /* taskiq-pg LISTEN keepalive */"
 
 POLL_NOW = ""
 """Queue item that asks a listening worker to poll for pending messages right away (never a message id)."""
+
+
+def schema_lock_query(table_name: str) -> str:
+    """
+    Return a query that serializes schema setup of one messages table.
+
+    Run it first in the transaction that creates the table and its indexes: brokers that start at the same
+    time then wait for each other instead of failing on concurrent `CREATE ... IF NOT EXISTS`.
+    """
+    digest = hashlib.sha256(f"taskiq_pg:messages:{table_name}".encode()).digest()
+    return f"SELECT pg_advisory_xact_lock({int.from_bytes(digest[:8], 'big', signed=True)})"

@@ -11,7 +11,7 @@ from psqlpy.exceptions import ConnectionExecuteError
 from psqlpy.extra_types import JSONB
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.psqlpy.queries import (
@@ -114,9 +114,10 @@ class PSQLPyBroker(BasePostgresBroker):
             )
 
         # create messages table if it doesn't exist
-        async with self._write_pool.acquire() as conn:
-            await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
-            await conn.execute(
+        async with self._write_pool.acquire() as conn, conn.transaction() as transaction:
+            await transaction.execute(schema_lock_query(self.table_name))
+            await transaction.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+            await transaction.execute(
                 CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
             )
 
