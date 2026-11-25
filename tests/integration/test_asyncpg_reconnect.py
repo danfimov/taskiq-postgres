@@ -7,6 +7,7 @@ import asyncpg
 import pytest
 from taskiq import BrokerMessage
 
+from taskiq_pg._internal.broker import POLL_NOW
 from taskiq_pg.asyncpg import AsyncpgBroker
 
 
@@ -39,7 +40,7 @@ async def test_listener_receives_messages_after_connection_loss(
     failures: int,
 ) -> None:
     """Resume receiving tasks after disconnection, including temporary database unavailability."""
-    broker = AsyncpgBroker(dsn=pg_dsn)
+    broker = AsyncpgBroker(dsn=pg_dsn, table_name=f"reconnect_{uuid.uuid4().hex}")
     await broker.startup()
     original = broker._read_conn  # noqa: SLF001
     assert original is not None
@@ -144,7 +145,10 @@ async def test_listener_recovers_when_resubscription_fails(
             queue = broker._queue  # noqa: SLF001
             assert queue is not None
             await connection.execute(f"NOTIFY {broker.channel_name}, '42'")
-            assert await asyncio.wait_for(queue.get(), timeout=5) == "42"
+            payload = await asyncio.wait_for(queue.get(), timeout=5)
+            while payload == POLL_NOW:  # reconnecting also asks the worker to poll the table
+                payload = await asyncio.wait_for(queue.get(), timeout=5)
+            assert payload == "42"
         assert len(failed_connections) == 1
         assert failed_connections[0].is_closed()
     finally:

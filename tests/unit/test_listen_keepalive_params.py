@@ -50,3 +50,22 @@ def test_when_keepalive_settings_are_invalid__then_error_is_raised(
     # when / then
     with pytest.raises(ValueError, match=match):
         broker_class(**kwargs)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("broker_class", BROKERS)
+def test_when_broker_is_created__then_poll_interval_defaults_to_five_seconds(broker_class: tp.Any) -> None:
+    # when
+    broker = broker_class()
+
+    # then
+    assert broker.poll_interval == 5.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("broker_class", BROKERS)
+@pytest.mark.parametrize("poll_interval", [0, -1])
+def test_when_poll_interval_is_not_positive__then_error_is_raised(broker_class: tp.Any, poll_interval: float) -> None:
+    # when / then
+    with pytest.raises(ValueError, match="poll_interval"):
+        broker_class(poll_interval=poll_interval)

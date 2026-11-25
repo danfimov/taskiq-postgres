@@ -10,11 +10,14 @@ from psycopg import AsyncConnection, AsyncRawCursor, sql
 from psycopg_pool import AsyncConnectionPool
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
 from taskiq_pg._internal.retry import retry_delays
+from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.psycopg.queries import (
     CLAIM_MESSAGE_QUERY,
+    CLAIM_NEXT_READY_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
+    CREATE_PENDING_INDEX_QUERY,
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
@@ -58,6 +61,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: None = ...,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -76,6 +80,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: None = ...,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -94,6 +99,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: AsyncConnection,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -112,6 +118,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: AsyncConnection,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     def __init__(  # noqa: PLR0913
@@ -129,6 +136,7 @@ class PsycopgBroker(BasePostgresBroker):
         read_connection: AsyncConnection | None = None,
         listen_keepalive_interval: float | None = 30.0,
         listen_keepalive_timeout: float = 5.0,
+        poll_interval: float = 5.0,
     ) -> None:
         """
         Construct a new PsycopgBroker.
@@ -148,6 +156,7 @@ class PsycopgBroker(BasePostgresBroker):
             listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
                 with a query; None disables the check.
             listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
+            poll_interval: How often, in seconds, to look for pending messages whose NOTIFY was missed.
         """
         super().__init__(
             dsn=dsn,
@@ -160,6 +169,7 @@ class PsycopgBroker(BasePostgresBroker):
             write_kwargs=write_kwargs,
             listen_keepalive_interval=listen_keepalive_interval,
             listen_keepalive_timeout=listen_keepalive_timeout,
+            poll_interval=poll_interval,
         )
 
         self._owns_write_pool = True
@@ -171,6 +181,8 @@ class PsycopgBroker(BasePostgresBroker):
         if read_connection is not None:
             self._read_conn = read_connection
             self._owns_read_conn = False
+
+        self._notify_tasks: set[asyncio.Task[None]] = set()
 
     async def startup(self) -> None:
         """Initialize the broker."""
@@ -187,8 +199,19 @@ class PsycopgBroker(BasePostgresBroker):
         if self._write_pool.closed:
             await self._write_pool.open()
 
-        async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+        async with (
+            self._write_pool.connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(schema_lock_query(self.table_name))
             await cursor.execute(sql.SQL(CREATE_MESSAGE_TABLE_QUERY).format(sql.Identifier(self.table_name)))
+            await cursor.execute(
+                sql.SQL(CREATE_PENDING_INDEX_QUERY).format(
+                    index=sql.Identifier(f"{self.table_name}_pending_idx"),
+                    table=sql.Identifier(self.table_name),
+                ),
+            )
 
         if self._owns_read_conn:
             await self._connect_listener()
@@ -254,6 +277,8 @@ class PsycopgBroker(BasePostgresBroker):
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
         self._closing = True
+        for task in list(self._notify_tasks):
+            await cancel_and_wait(task)
         await super().shutdown()
         if self._notifies_iter is not None:
             with suppress(RuntimeError):  # RuntimeError: aclose(): asynchronous generator is already running
@@ -272,6 +297,10 @@ class PsycopgBroker(BasePostgresBroker):
 
         :param message: Message to send.
         """
+        # Parse the delay before inserting, so a malformed label does not leave a message behind.
+        delay_value = message.labels.get("delay")
+        delay_seconds = None if delay_value is None else int(delay_value)
+
         async with self._write_pool.connection() as connection, connection.cursor() as cursor:
             # insert message into db table
             await cursor.execute(
@@ -289,8 +318,7 @@ class PsycopgBroker(BasePostgresBroker):
                 raise RuntimeError(msg)
             message_inserted_id = int(row[0])
 
-            delay_value = tp.cast("str | None", message.labels.get("delay"))
-            if delay_value is None:
+            if delay_seconds is None:
                 # Send NOTIFY with message ID as payload
                 await cursor.execute(
                     sql.SQL("NOTIFY {}, {}").format(
@@ -302,7 +330,11 @@ class PsycopgBroker(BasePostgresBroker):
 
         # The insert is committed once the connection is returned to the pool,
         # so a delayed NOTIFY sent from here never reaches a worker before the row is visible.
-        await self._schedule_notification(message_inserted_id, int(delay_value))
+        # The NOTIFY is only the fast path: workers also poll for messages whose delay has elapsed,
+        # so the message is delivered even if this producer exits before sending it.
+        task = asyncio.create_task(self._schedule_notification(message_inserted_id, delay_seconds))
+        self._notify_tasks.add(task)
+        task.add_done_callback(self._notify_tasks.discard)
 
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
@@ -318,23 +350,30 @@ class PsycopgBroker(BasePostgresBroker):
 
     async def _notifications(self) -> AsyncGenerator[str, None]:
         """
-        Yield notification payloads from the current LISTEN connection.
+        Yield notification payloads from the current LISTEN connection, and POLL_NOW when it is time to poll.
 
-        A broker-owned connection is read in slices of `listen_keepalive_interval` seconds with a
-        keepalive query in between; a query that does not answer in time raises OperationalError.
+        POLL_NOW comes first, so the table is polled right after start and after every reconnect. The
+        connection is read in slices up to the next poll and, for a broker-owned connection, up to the
+        next keepalive query; a keepalive query that does not answer in time raises OperationalError.
         """
-        interval = self.listen_keepalive_interval
-        if interval is None or not self._owns_read_conn:
-            async for notify in self._notifies_iter:
-                yield notify.payload
-            return
+        keepalive = self.listen_keepalive_interval if self._owns_read_conn else None
+        loop = asyncio.get_running_loop()
+        next_poll = loop.time()
+        next_keepalive = None if keepalive is None else loop.time() + keepalive
         while not self._is_closing():
-            self._notifies_iter = self._read_conn.notifies(timeout=interval)
+            now = loop.time()
+            if now >= next_poll:
+                next_poll = now + self.poll_interval
+                yield POLL_NOW
+                continue
+            if keepalive is not None and next_keepalive is not None and now >= next_keepalive:
+                await self._check_listener()
+                next_keepalive = loop.time() + keepalive
+                continue
+            deadline = next_poll if next_keepalive is None else min(next_poll, next_keepalive)
+            self._notifies_iter = self._read_conn.notifies(timeout=deadline - now)
             async for notify in self._notifies_iter:
                 yield notify.payload
-            if self._is_closing():
-                return
-            await self._check_listener()
 
     async def _check_listener(self) -> None:
         """
@@ -386,30 +425,52 @@ class PsycopgBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
-        async for message_id_str in self._listen_context():
-            message_id = int(message_id_str)  # payload is the message id
-            try:
-                async with self._write_pool.connection() as connection, connection.cursor() as cursor:
-                    await cursor.execute(
-                        sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                        [message_id],
-                    )
-                    claimed_message = await cursor.fetchone()
-                    if claimed_message is None:
-                        continue
-            except psycopg.OperationalError:  # message was claimed by another worker
+        async for payload in self._listen_context():
+            if payload == POLL_NOW:
+                while (claimed := await self._claim_next_ready()) is not None:
+                    yield self._ackable(claimed)
                 continue
-            message_str = claimed_message[3]
-            if not isinstance(message_str, str):
-                msg = "Message is not a string"
-                raise TypeError(msg)
-            message_data = message_str.encode()
+            claimed = await self._claim(int(payload))  # payload is the message id
+            if claimed is not None:
+                yield self._ackable(claimed)
 
-            async def ack(*, _message_id: int = message_id) -> None:
-                async with self._write_pool.connection() as connection, connection.cursor() as cursor:
-                    await cursor.execute(
-                        sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                        [_message_id],
-                    )
+    async def _claim(self, message_id: int) -> tuple[tp.Any, ...] | None:
+        """Claim a pending message by its id."""
+        try:
+            async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
+                    [message_id],
+                )
+                return await cursor.fetchone()
+        except psycopg.OperationalError:  # message was claimed by another worker
+            return None
 
-            yield AckableMessage(data=message_data, ack=ack)
+    async def _claim_next_ready(self) -> tuple[tp.Any, ...] | None:
+        """Claim the oldest pending message that is ready (its delay, if any, has elapsed)."""
+        try:
+            async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL(CLAIM_NEXT_READY_MESSAGE_QUERY).format(table=sql.Identifier(self.table_name)),
+                )
+                return await cursor.fetchone()
+        except psycopg.OperationalError:
+            logger.warning("Polling for pending messages failed; will retry", exc_info=True)
+            return None
+
+    def _ackable(self, claimed: tuple[tp.Any, ...]) -> AckableMessage:
+        """Wrap a claimed message; acknowledging it deletes the row."""
+        message_id = int(claimed[0])
+        message_str = claimed[3]
+        if not isinstance(message_str, str):
+            msg = "Message is not a string"
+            raise TypeError(msg)
+
+        async def ack() -> None:
+            async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
+                    [message_id],
+                )
+
+        return AckableMessage(data=message_str.encode(), ack=ack)

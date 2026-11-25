@@ -7,12 +7,14 @@ from collections.abc import AsyncGenerator, Callable
 import aiopg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.aiopg.queries import (
     CLAIM_MESSAGE_QUERY,
+    CLAIM_NEXT_READY_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
+    CREATE_PENDING_INDEX_QUERY,
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
@@ -49,6 +51,7 @@ class AiopgBroker(BasePostgresBroker):
         read_connection: None = ...,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -67,6 +70,7 @@ class AiopgBroker(BasePostgresBroker):
         read_connection: None = ...,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -85,6 +89,7 @@ class AiopgBroker(BasePostgresBroker):
         read_connection: aiopg.Connection,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -103,6 +108,7 @@ class AiopgBroker(BasePostgresBroker):
         read_connection: aiopg.Connection,
         listen_keepalive_interval: float | None = ...,
         listen_keepalive_timeout: float = ...,
+        poll_interval: float = ...,
     ) -> None: ...
 
     def __init__(  # noqa: PLR0913
@@ -120,6 +126,7 @@ class AiopgBroker(BasePostgresBroker):
         read_connection: aiopg.Connection | None = None,
         listen_keepalive_interval: float | None = 30.0,
         listen_keepalive_timeout: float = 5.0,
+        poll_interval: float = 5.0,
     ) -> None:
         """
         Construct a new AiopgBroker.
@@ -139,6 +146,7 @@ class AiopgBroker(BasePostgresBroker):
             listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
                 with a query; None disables the check.
             listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
+            poll_interval: How often, in seconds, to look for pending messages whose NOTIFY was missed.
         """
         super().__init__(
             dsn=dsn,
@@ -151,6 +159,7 @@ class AiopgBroker(BasePostgresBroker):
             write_kwargs=write_kwargs,
             listen_keepalive_interval=listen_keepalive_interval,
             listen_keepalive_timeout=listen_keepalive_timeout,
+            poll_interval=poll_interval,
         )
 
         self._owns_write_pool = True
@@ -172,7 +181,18 @@ class AiopgBroker(BasePostgresBroker):
         if self._write_pool is None:
             self._write_pool = await aiopg.create_pool(self.dsn, **self.write_kwargs)
         async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
-            await cursor.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+            # aiopg connections are always in autocommit mode, so the transaction is explicit.
+            await cursor.execute("BEGIN")
+            try:
+                await cursor.execute(schema_lock_query(self.table_name))
+                await cursor.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+                await cursor.execute(
+                    CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
+                )
+            except BaseException:
+                await cursor.execute("ROLLBACK")
+                raise
+            await cursor.execute("COMMIT")
         if self._owns_read_conn:
             self._read_conn = await self._connect_listener()
         elif self._read_conn is not None:
@@ -233,6 +253,8 @@ class AiopgBroker(BasePostgresBroker):
                 logger.warning("LISTEN connection lost on channel %s; reconnecting", self.channel_name, exc_info=True)
             await conn.close()
             self._read_conn = await self._restore_listener()
+            if self._queue is not None:  # notifications sent while reconnecting were missed
+                self._queue.put_nowait(POLL_NOW)
 
     async def _move_notifications(self, conn: aiopg.Connection) -> None:
         """Move notifications into the queue until the connection is lost."""
@@ -286,6 +308,10 @@ class AiopgBroker(BasePostgresBroker):
             msg = "Please run startup before kicking."
             raise ValueError(msg)
 
+        # Parse the delay before inserting, so a malformed label does not leave a message behind.
+        delay_value = message.labels.get("delay")
+        delay_seconds = None if delay_value is None else int(delay_value)
+
         async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
             await cursor.execute(
                 INSERT_MESSAGE_QUERY.format(self.table_name),
@@ -297,13 +323,12 @@ class AiopgBroker(BasePostgresBroker):
                 raise RuntimeError(msg)
             message_id = int(row[0])
 
-            delay_value = message.labels.get("delay")
-            if delay_value is None:
+            if delay_seconds is None:
                 # Send a NOTIFY with the message ID as payload
                 await cursor.execute(f"NOTIFY {self.channel_name}, %s", (str(message_id),))
                 return
 
-        task = asyncio.create_task(self._schedule_notification(message_id, int(delay_value)))
+        task = asyncio.create_task(self._schedule_notification(message_id, delay_seconds))
         self._notify_tasks.add(task)
         task.add_done_callback(self._notify_tasks.discard)
 
@@ -330,29 +355,54 @@ class AiopgBroker(BasePostgresBroker):
             msg = "Startup did not initialize the queue."
             raise ValueError(msg)
 
+        queue = self._queue
+        loop = asyncio.get_running_loop()
+        next_poll = loop.time()  # poll right away: messages may have been kicked while nobody listened
         while True:
             try:
-                payload = await self._queue.get()
-                message_id = int(payload)
-                async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
-                    await cursor.execute(CLAIM_MESSAGE_QUERY.format(self.table_name), (message_id,))
-                    claimed = await cursor.fetchone()
-                if claimed is None:
+                if loop.time() >= next_poll:
+                    next_poll = loop.time() + self.poll_interval
+                    while (
+                        claimed := await self._claim(CLAIM_NEXT_READY_MESSAGE_QUERY.format(table=self.table_name))
+                    ) is not None:
+                        yield self._ackable(claimed)
                     continue
-                message_str = claimed[1]
-                if not isinstance(message_str, str):
-                    msg = "message is not a string"
-                    raise TypeError(msg)
-                message_data = message_str.encode()
-
-                async def ack(*, _message_id: int = message_id) -> None:
-                    if self._write_pool is None:
-                        msg = "Call startup before starting listening."
-                        raise ValueError(msg)
-                    async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
-                        await cursor.execute(DELETE_MESSAGE_QUERY.format(self.table_name), (_message_id,))
-
-                yield AckableMessage(data=message_data, ack=ack)
+                try:
+                    payload = await asyncio.wait_for(queue.get(), next_poll - loop.time())
+                except TimeoutError:
+                    continue
+                if payload == POLL_NOW:
+                    next_poll = loop.time()
+                    continue
+                claimed = await self._claim(CLAIM_MESSAGE_QUERY.format(self.table_name), (int(payload),))
+                if claimed is not None:
+                    yield self._ackable(claimed)
             except Exception:
                 logger.exception("Error processing message")
                 continue
+
+    async def _claim(self, query: str, params: tuple[tp.Any, ...] = ()) -> tuple[tp.Any, ...] | None:
+        """Run a claim query and return the claimed (id, message) row, if any."""
+        if self._write_pool is None:
+            msg = "Call startup before starting listening."
+            raise ValueError(msg)
+        async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
+            await cursor.execute(query, params)
+            return tp.cast("tuple[tp.Any, ...] | None", await cursor.fetchone())
+
+    def _ackable(self, claimed: tuple[tp.Any, ...]) -> AckableMessage:
+        """Wrap a claimed message; acknowledging it deletes the row."""
+        message_id = int(claimed[0])
+        message_str = claimed[1]
+        if not isinstance(message_str, str):
+            msg = "message is not a string"
+            raise TypeError(msg)
+
+        async def ack() -> None:
+            if self._write_pool is None:
+                msg = "Call startup before starting listening."
+                raise ValueError(msg)
+            async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
+                await cursor.execute(DELETE_MESSAGE_QUERY.format(self.table_name), (message_id,))
+
+        return AckableMessage(data=message_str.encode(), ack=ack)

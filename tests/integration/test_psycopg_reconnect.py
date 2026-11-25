@@ -20,7 +20,7 @@ async def test_when_reconnect_attempts_fail__then_listener_keeps_retrying(
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel)
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     connect_listener = broker._connect_listener  # noqa: SLF001
     attempts = 0
@@ -70,7 +70,7 @@ async def test_when_supplied_read_connection_was_terminated__then_error_is_raise
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
     read_connection = await psycopg.AsyncConnection.connect(pg_dsn, autocommit=True)
-    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, read_connection=read_connection)
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel, read_connection=read_connection)
     await broker.startup()
     listener = broker.listen()
     task: asyncio.Task[tp.Any] = asyncio.create_task(listener.__anext__())
@@ -98,7 +98,7 @@ async def test_when_broker_is_shut_down_while_listening__then_listener_stops_wit
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel)
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     listener = broker.listen()
     task: asyncio.Task[tp.Any] = asyncio.create_task(listener.__anext__())
@@ -123,7 +123,7 @@ async def test_when_broker_is_shut_down_during_reconnect__then_reconnect_stops(
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel)
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     attempts = 0
 

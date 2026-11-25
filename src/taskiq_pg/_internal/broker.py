@@ -1,4 +1,5 @@
 import abc
+import hashlib
 import typing as tp
 
 from taskiq import AsyncBroker, AsyncResultBackend
@@ -29,6 +30,7 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
         *,
         listen_keepalive_interval: float | None = 30.0,
         listen_keepalive_timeout: float = 5.0,
+        poll_interval: float = 5.0,
     ) -> None:
         """
         Construct a new broker.
@@ -47,12 +49,18 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
                 and detects a connection that hangs without being closed. None disables the check.
             listen_keepalive_timeout: How long, in seconds, to wait for the answer before treating
                 the LISTEN connection as lost and reconnecting.
+            poll_interval: How often, in seconds, a listening worker looks for pending messages whose
+                NOTIFY it missed (sent while it was not listening or reconnecting), including delayed
+                messages whose delay has elapsed. It also polls right after start and after reconnecting.
         """
         if listen_keepalive_interval is not None and listen_keepalive_interval <= 0:
             msg = "listen_keepalive_interval must be positive or None"
             raise ValueError(msg)
         if listen_keepalive_timeout <= 0:
             msg = "listen_keepalive_timeout must be positive"
+            raise ValueError(msg)
+        if poll_interval <= 0:
+            msg = "poll_interval must be positive"
             raise ValueError(msg)
         super().__init__(
             result_backend=result_backend,
@@ -66,8 +74,23 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
         self.max_retry_attempts: int = max_retry_attempts
         self.listen_keepalive_interval: float | None = listen_keepalive_interval
         self.listen_keepalive_timeout: float = listen_keepalive_timeout
+        self.poll_interval: float = poll_interval
         self._queue: asyncio.Queue[str] | None = None
 
 
 LISTEN_KEEPALIVE_QUERY = "SELECT 1 /* taskiq-pg LISTEN keepalive */"
 """Query used to check a LISTEN connection; the comment makes it recognizable in pg_stat_activity."""
+
+POLL_NOW = ""
+"""Queue item that asks a listening worker to poll for pending messages right away (never a message id)."""
+
+
+def schema_lock_query(table_name: str) -> str:
+    """
+    Return a query that serializes schema setup of one messages table.
+
+    Run it first in the transaction that creates the table and its indexes: brokers that start at the same
+    time then wait for each other instead of failing on concurrent `CREATE ... IF NOT EXISTS`.
+    """
+    digest = hashlib.sha256(f"taskiq_pg:messages:{table_name}".encode()).digest()
+    return f"SELECT pg_advisory_xact_lock({int.from_bytes(digest[:8], 'big', signed=True)})"

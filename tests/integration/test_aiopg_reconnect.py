@@ -20,7 +20,7 @@ async def test_when_reconnect_attempts_fail__then_listener_keeps_retrying(
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = AiopgBroker(dsn=pg_dsn, channel_name=channel)
+    broker = AiopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     connect_listener = broker._connect_listener  # noqa: SLF001
     attempts = 0
@@ -71,7 +71,7 @@ async def test_when_supplied_read_connection_was_terminated__then_warning_is_log
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
     read_connection = await aiopg.connect(pg_dsn)
-    broker = AiopgBroker(dsn=pg_dsn, channel_name=channel, read_connection=read_connection)
+    broker = AiopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel, read_connection=read_connection)
     await broker.startup()
     try:
         with caplog.at_level("WARNING", logger="taskiq.aiopg_broker"):
@@ -98,7 +98,7 @@ async def test_when_shutdown_during_reconnect__then_reconnect_is_cancelled(
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = AiopgBroker(dsn=pg_dsn, channel_name=channel)
+    broker = AiopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     connecting = asyncio.Event()
     cancelled = asyncio.Event()
