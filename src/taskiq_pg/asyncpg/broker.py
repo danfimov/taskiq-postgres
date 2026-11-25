@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator, Callable
 import asyncpg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.asyncpg.queries import (
@@ -47,6 +47,8 @@ class AsyncpgBroker(BasePostgresBroker):
         *,
         write_pool: None = ...,
         read_connection: None = ...,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -63,6 +65,8 @@ class AsyncpgBroker(BasePostgresBroker):
         *,
         write_pool: asyncpg.pool.Pool,
         read_connection: None = ...,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -79,6 +83,8 @@ class AsyncpgBroker(BasePostgresBroker):
         *,
         write_pool: None = ...,
         read_connection: asyncpg.Connection,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -95,6 +101,8 @@ class AsyncpgBroker(BasePostgresBroker):
         *,
         write_pool: asyncpg.pool.Pool,
         read_connection: asyncpg.Connection,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     def __init__(  # noqa: PLR0913
@@ -110,6 +118,8 @@ class AsyncpgBroker(BasePostgresBroker):
         *,
         write_pool: asyncpg.pool.Pool | None = None,
         read_connection: asyncpg.Connection | None = None,
+        listen_keepalive_interval: float | None = 30.0,
+        listen_keepalive_timeout: float = 5.0,
     ) -> None:
         """
         Construct a new AsyncpgBroker.
@@ -126,6 +136,9 @@ class AsyncpgBroker(BasePostgresBroker):
             write_pool: An existing connection pool to reuse for writes.
             read_connection: An existing connection to reuse for LISTEN.
                 Its lifecycle, including reconnection, remains the caller's responsibility.
+            listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
+                with a query; None disables the check.
+            listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
         """
         super().__init__(
             dsn=dsn,
@@ -136,6 +149,8 @@ class AsyncpgBroker(BasePostgresBroker):
             max_retry_attempts=max_retry_attempts,
             read_kwargs=read_kwargs,
             write_kwargs=write_kwargs,
+            listen_keepalive_interval=listen_keepalive_interval,
+            listen_keepalive_timeout=listen_keepalive_timeout,
         )
 
         self._owns_write_pool = True
@@ -215,7 +230,7 @@ class AsyncpgBroker(BasePostgresBroker):
     async def _restore_listener(self) -> None:
         """Restore LISTEN after disconnection, retrying with randomized delays of up to 30 seconds."""
         while True:
-            await self._listener_disconnected.wait()
+            await self._wait_for_disconnection()
             delays = retry_delays()
             while True:
                 try:
@@ -227,6 +242,39 @@ class AsyncpgBroker(BasePostgresBroker):
                 else:
                     logger.info("LISTEN connection restored on channel %s", self.channel_name)
                     break
+
+    async def _wait_for_disconnection(self) -> None:
+        """Wait until the LISTEN connection is closed or, if it is broker-owned, stops answering keepalive queries."""
+        interval = self.listen_keepalive_interval
+        if interval is None or not self._owns_read_conn:
+            await self._listener_disconnected.wait()
+            return
+        while True:
+            try:
+                await asyncio.wait_for(self._listener_disconnected.wait(), interval)
+            except TimeoutError:
+                pass
+            else:
+                return
+            conn = self._read_conn
+            if conn is None:
+                return
+            try:
+                await asyncio.wait_for(self._keepalive_query(), self.listen_keepalive_timeout)
+            except Exception:
+                logger.warning(
+                    "LISTEN connection on channel %s did not answer a keepalive query; reconnecting",
+                    self.channel_name,
+                    exc_info=True,
+                )
+                conn.remove_termination_listener(self._connection_terminated)
+                conn.terminate()
+                return
+
+    async def _keepalive_query(self) -> None:
+        """Run a trivial query on the LISTEN connection."""
+        if self._read_conn is not None:
+            await self._read_conn.fetchval(LISTEN_KEEPALIVE_QUERY)
 
     def _notification_handler(
         self,
