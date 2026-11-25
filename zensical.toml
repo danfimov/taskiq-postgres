@@ -10,6 +10,7 @@ nav = [
     "tutorial/result_backend.md",
     "tutorial/schedule_source.md",
     "tutorial/sharing_pool.md",
+    "tutorial/delivery.md",
     "tutorial/common_issues.md",
   ] },
   { "API" = ["reference.md"] },

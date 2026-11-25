@@ -23,18 +23,26 @@ Check PostgreSQL is running and accessible:
 ## Table Creation Issues
 
 
-Ensure user has `CREATE TABLE` permissions or manually create tables using provided schemas:
+Ensure user has `CREATE TABLE` permissions or manually create tables using provided schemas.
+A broker that does not own its table needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE` on it and `USAGE` on its
+id sequence, as long as the table and its indexes below exist:
 
 ```sql
 -- for broker
-CREATE TABLE taskiq_queue (
+CREATE TABLE taskiq_messages (
     id SERIAL PRIMARY KEY,
-    task_id UUID NOT NULL,
+    task_id VARCHAR NOT NULL,
     task_name VARCHAR NOT NULL,
-    message BYTEA NOT NULL,
-    labels JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    message TEXT NOT NULL,
+    labels JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    claimed_at TIMESTAMP WITH TIME ZONE,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX taskiq_messages_pending_idx ON taskiq_messages (id) WHERE status = 'pending';
+-- only if the broker uses processing_timeout
+CREATE INDEX taskiq_messages_processing_idx ON taskiq_messages (claimed_at) WHERE status = 'processing';
 
 -- for result backend
 CREATE TABLE taskiq_results (
