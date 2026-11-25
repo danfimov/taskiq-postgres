@@ -77,3 +77,25 @@ DELETE FROM {};
 DELETE_SCHEDULE_QUERY = """
 DELETE FROM {} WHERE id = %s;
 """
+
+CREATE_MESSAGE_TABLE_QUERY = """
+CREATE TABLE IF NOT EXISTS {} (
+    id SERIAL PRIMARY KEY,
+    task_id VARCHAR NOT NULL,
+    task_name VARCHAR NOT NULL,
+    message TEXT NOT NULL,
+    labels JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+"""
+
+INSERT_MESSAGE_QUERY = """
+INSERT INTO {} (task_id, task_name, message, labels)
+VALUES (%s, %s, %s, %s)
+RETURNING id
+"""
+
+CLAIM_MESSAGE_QUERY = "UPDATE {} SET status = 'processing' WHERE id = %s AND status = 'pending' RETURNING id, message"
+
+DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = %s"

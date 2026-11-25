@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from taskiq_pg.aiopg import AiopgResultBackend
+from taskiq_pg.aiopg import AiopgBroker, AiopgResultBackend
 from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgResultBackend
 from taskiq_pg.psqlpy import PSQLPyBroker, PSQLPyResultBackend
 from taskiq_pg.psycopg import PsycopgBroker, PsycopgResultBackend
@@ -24,11 +24,12 @@ from taskiq_pg.psycopg import PsycopgBroker, PsycopgResultBackend
         AsyncpgBroker,
         PSQLPyBroker,
         PsycopgBroker,
+        AiopgBroker,
     ],
 )
 async def test_when_dsn_has_sqlalchemy_style_driver_suffix__then_broker_still_connects(
     pg_dsn: str,
-    broker_class: type[AsyncpgBroker | PSQLPyBroker | PsycopgBroker],
+    broker_class: type[AiopgBroker | AsyncpgBroker | PSQLPyBroker | PsycopgBroker],
     dialect_suffix: str,
 ) -> None:
     dsn_with_driver_suffix = pg_dsn.replace("postgres://", f"{dialect_suffix}://", 1)
