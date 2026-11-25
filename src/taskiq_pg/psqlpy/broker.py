@@ -40,6 +40,8 @@ class MessageRow:
     labels: JSONB
     status: str
     created_at: datetime
+    claimed_at: datetime | None = None
+    attempts: int = 0
 
 
 class PSQLPyBroker(BasePostgresBroker):
@@ -65,6 +67,7 @@ class PSQLPyBroker(BasePostgresBroker):
         listen_keepalive_interval: float | None = 30.0,
         listen_keepalive_timeout: float = 5.0,
         poll_interval: float = 5.0,
+        processing_timeout: float | None = None,
     ) -> None:
         """
         Construct a new PSQLPyBroker.
@@ -84,6 +87,8 @@ class PSQLPyBroker(BasePostgresBroker):
                 with a query; None disables the check.
             listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
             poll_interval: How often, in seconds, to look for pending messages whose NOTIFY was missed.
+            processing_timeout: Seconds after which an unacknowledged claimed message is delivered again
+                (at-least-once delivery); None keeps at-most-once delivery.
         """
         super().__init__(
             dsn=dsn,
@@ -96,6 +101,7 @@ class PSQLPyBroker(BasePostgresBroker):
             listen_keepalive_interval=listen_keepalive_interval,
             listen_keepalive_timeout=listen_keepalive_timeout,
             poll_interval=poll_interval,
+            processing_timeout=processing_timeout,
         )
 
         self._owns_write_pool = True
