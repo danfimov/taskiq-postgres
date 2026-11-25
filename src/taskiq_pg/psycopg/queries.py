@@ -99,3 +99,18 @@ DELETE FROM {};
 DELETE_SCHEDULE_QUERY = """
 DELETE FROM {} WHERE id = %s;
 """
+
+CREATE_PENDING_INDEX_QUERY = "CREATE INDEX IF NOT EXISTS {index} ON {table} (id) WHERE status = 'pending'"
+
+CLAIM_NEXT_READY_MESSAGE_QUERY = """
+UPDATE {table} SET status = 'processing'
+WHERE id = (
+    SELECT id FROM {table}
+    WHERE status = 'pending'
+        AND created_at + make_interval(secs => COALESCE((labels->>'delay')::double precision, 0)) <= now()
+    ORDER BY id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *
+"""

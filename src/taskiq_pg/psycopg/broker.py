@@ -10,11 +10,13 @@ from psycopg import AsyncConnection, AsyncRawCursor, sql
 from psycopg_pool import AsyncConnectionPool
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg.psycopg.queries import (
     CLAIM_MESSAGE_QUERY,
+    CLAIM_NEXT_READY_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
+    CREATE_PENDING_INDEX_QUERY,
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
@@ -196,6 +198,12 @@ class PsycopgBroker(BasePostgresBroker):
 
         async with self._write_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(sql.SQL(CREATE_MESSAGE_TABLE_QUERY).format(sql.Identifier(self.table_name)))
+            await cursor.execute(
+                sql.SQL(CREATE_PENDING_INDEX_QUERY).format(
+                    index=sql.Identifier(f"{self.table_name}_pending_idx"),
+                    table=sql.Identifier(self.table_name),
+                ),
+            )
 
         if self._owns_read_conn:
             await self._connect_listener()
@@ -325,23 +333,30 @@ class PsycopgBroker(BasePostgresBroker):
 
     async def _notifications(self) -> AsyncGenerator[str, None]:
         """
-        Yield notification payloads from the current LISTEN connection.
+        Yield notification payloads from the current LISTEN connection, and POLL_NOW when it is time to poll.
 
-        A broker-owned connection is read in slices of `listen_keepalive_interval` seconds with a
-        keepalive query in between; a query that does not answer in time raises OperationalError.
+        POLL_NOW comes first, so the table is polled right after start and after every reconnect. The
+        connection is read in slices up to the next poll and, for a broker-owned connection, up to the
+        next keepalive query; a keepalive query that does not answer in time raises OperationalError.
         """
-        interval = self.listen_keepalive_interval
-        if interval is None or not self._owns_read_conn:
-            async for notify in self._notifies_iter:
-                yield notify.payload
-            return
+        keepalive = self.listen_keepalive_interval if self._owns_read_conn else None
+        loop = asyncio.get_running_loop()
+        next_poll = loop.time()
+        next_keepalive = None if keepalive is None else loop.time() + keepalive
         while not self._is_closing():
-            self._notifies_iter = self._read_conn.notifies(timeout=interval)
+            now = loop.time()
+            if now >= next_poll:
+                next_poll = now + self.poll_interval
+                yield POLL_NOW
+                continue
+            if keepalive is not None and next_keepalive is not None and now >= next_keepalive:
+                await self._check_listener()
+                next_keepalive = loop.time() + keepalive
+                continue
+            deadline = next_poll if next_keepalive is None else min(next_poll, next_keepalive)
+            self._notifies_iter = self._read_conn.notifies(timeout=deadline - now)
             async for notify in self._notifies_iter:
                 yield notify.payload
-            if self._is_closing():
-                return
-            await self._check_listener()
 
     async def _check_listener(self) -> None:
         """
@@ -393,30 +408,52 @@ class PsycopgBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
-        async for message_id_str in self._listen_context():
-            message_id = int(message_id_str)  # payload is the message id
-            try:
-                async with self._write_pool.connection() as connection, connection.cursor() as cursor:
-                    await cursor.execute(
-                        sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                        [message_id],
-                    )
-                    claimed_message = await cursor.fetchone()
-                    if claimed_message is None:
-                        continue
-            except psycopg.OperationalError:  # message was claimed by another worker
+        async for payload in self._listen_context():
+            if payload == POLL_NOW:
+                while (claimed := await self._claim_next_ready()) is not None:
+                    yield self._ackable(claimed)
                 continue
-            message_str = claimed_message[3]
-            if not isinstance(message_str, str):
-                msg = "Message is not a string"
-                raise TypeError(msg)
-            message_data = message_str.encode()
+            claimed = await self._claim(int(payload))  # payload is the message id
+            if claimed is not None:
+                yield self._ackable(claimed)
 
-            async def ack(*, _message_id: int = message_id) -> None:
-                async with self._write_pool.connection() as connection, connection.cursor() as cursor:
-                    await cursor.execute(
-                        sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                        [_message_id],
-                    )
+    async def _claim(self, message_id: int) -> tuple[tp.Any, ...] | None:
+        """Claim a pending message by its id."""
+        try:
+            async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL(CLAIM_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
+                    [message_id],
+                )
+                return await cursor.fetchone()
+        except psycopg.OperationalError:  # message was claimed by another worker
+            return None
 
-            yield AckableMessage(data=message_data, ack=ack)
+    async def _claim_next_ready(self) -> tuple[tp.Any, ...] | None:
+        """Claim the oldest pending message that is ready (its delay, if any, has elapsed)."""
+        try:
+            async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL(CLAIM_NEXT_READY_MESSAGE_QUERY).format(table=sql.Identifier(self.table_name)),
+                )
+                return await cursor.fetchone()
+        except psycopg.OperationalError:
+            logger.warning("Polling for pending messages failed; will retry", exc_info=True)
+            return None
+
+    def _ackable(self, claimed: tuple[tp.Any, ...]) -> AckableMessage:
+        """Wrap a claimed message; acknowledging it deletes the row."""
+        message_id = int(claimed[0])
+        message_str = claimed[3]
+        if not isinstance(message_str, str):
+            msg = "Message is not a string"
+            raise TypeError(msg)
+
+        async def ack() -> None:
+            async with self._write_pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
+                    [message_id],
+                )
+
+        return AckableMessage(data=message_str.encode(), ack=ack)

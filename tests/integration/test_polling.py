@@ -8,10 +8,11 @@ import pytest
 from taskiq import AckableMessage, BrokerMessage
 
 from taskiq_pg.asyncpg import AsyncpgBroker
+from taskiq_pg.psycopg import PsycopgBroker
 
 
-Broker: tp.TypeAlias = AsyncpgBroker
-BROKERS: list[tp.Any] = [AsyncpgBroker]
+Broker: tp.TypeAlias = AsyncpgBroker | PsycopgBroker
+BROKERS: list[tp.Any] = [AsyncpgBroker, PsycopgBroker]
 
 
 def unique_names() -> dict[str, str]:
