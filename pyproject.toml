@@ -194,7 +194,7 @@ lines-after-imports = 2
 max-args = 9
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 modules = "taskiq_pg"
 exclude_gitignore = true
 platform = "linux"
