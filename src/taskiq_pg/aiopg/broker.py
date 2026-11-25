@@ -11,12 +11,16 @@ from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePos
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.aiopg.queries import (
+    ADD_DELIVERY_COLUMNS_QUERY,
     CLAIM_MESSAGE_QUERY,
     CLAIM_NEXT_READY_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
     CREATE_PENDING_INDEX_QUERY,
+    CREATE_PROCESSING_INDEX_QUERY,
     DELETE_MESSAGE_QUERY,
+    FAIL_EXHAUSTED_MESSAGES_QUERY,
     INSERT_MESSAGE_QUERY,
+    RELEASE_STALE_MESSAGES_QUERY,
 )
 
 
@@ -194,9 +198,17 @@ class AiopgBroker(BasePostgresBroker):
             try:
                 await cursor.execute(schema_lock_query(self.table_name))
                 await cursor.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+                await cursor.execute(ADD_DELIVERY_COLUMNS_QUERY.format(table=self.table_name))
                 await cursor.execute(
                     CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
                 )
+                if self.processing_timeout is not None:
+                    await cursor.execute(
+                        CREATE_PROCESSING_INDEX_QUERY.format(
+                            index=f"{self.table_name}_processing_idx",
+                            table=self.table_name,
+                        ),
+                    )
             except BaseException:
                 await cursor.execute("ROLLBACK")
                 raise
@@ -370,6 +382,7 @@ class AiopgBroker(BasePostgresBroker):
             try:
                 if loop.time() >= next_poll:
                     next_poll = loop.time() + self.poll_interval
+                    await self._release_stale_messages()
                     while (
                         claimed := await self._claim(CLAIM_NEXT_READY_MESSAGE_QUERY.format(table=self.table_name))
                     ) is not None:
@@ -397,6 +410,28 @@ class AiopgBroker(BasePostgresBroker):
         async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
             await cursor.execute(query, params)
             return tp.cast("tuple[tp.Any, ...] | None", await cursor.fetchone())
+
+    async def _release_stale_messages(self) -> None:
+        """
+        With processing_timeout set, return messages claimed too long ago to the queue.
+
+        A message whose attempts are exhausted is marked as failed instead.
+        """
+        if self.processing_timeout is None or self._write_pool is None:
+            return
+        params = (self.processing_timeout, self.max_retry_attempts)
+        async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
+            await cursor.execute(RELEASE_STALE_MESSAGES_QUERY.format(table=self.table_name), params)
+            await cursor.execute(FAIL_EXHAUSTED_MESSAGES_QUERY.format(table=self.table_name), params)
+            failed = await cursor.fetchall()
+        for message_id, task_id, task_name, attempts in failed:
+            logger.warning(
+                "Message %s (task %s, %s) was not acknowledged after %s attempts; marked as failed",
+                message_id,
+                task_id,
+                task_name,
+                attempts,
+            )
 
     def _ackable(self, claimed: tuple[tp.Any, ...]) -> AckableMessage:
         """Wrap a claimed message; acknowledging it deletes the row."""
