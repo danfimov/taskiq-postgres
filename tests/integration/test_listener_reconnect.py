@@ -34,10 +34,7 @@ async def wait_for_new_listen_backend(connection: asyncpg.Connection, channel: s
     [
         AsyncpgBroker,
         PsycopgBroker,
-        pytest.param(
-            PSQLPyBroker,
-            marks=pytest.mark.xfail(reason="psqlpy listener does not reconnect yet", raises=TimeoutError, strict=True),
-        ),
+        PSQLPyBroker,
     ],
 )
 async def test_when_listen_connection_was_terminated__then_worker_received_next_message(

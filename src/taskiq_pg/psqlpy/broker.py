@@ -2,6 +2,7 @@ import asyncio
 import logging
 import typing as tp
 from collections.abc import AsyncGenerator, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -11,6 +12,7 @@ from psqlpy.extra_types import JSONB
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg.psqlpy.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -43,6 +45,7 @@ class PSQLPyBroker(BasePostgresBroker):
     _read_conn: psqlpy.Connection
     _write_pool: psqlpy.ConnectionPool
     _listener: psqlpy.Listener
+    _listener_task: asyncio.Task[None] | None = None
     _queue: asyncio.Queue
     _owns_write_pool: bool
     _owns_read_conn: bool
@@ -181,24 +184,85 @@ class PSQLPyBroker(BasePostgresBroker):
         async with self._write_pool.acquire() as conn:
             await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
 
-        # listen to notification channel
-        self._listener = self._write_pool.listener()
-        await self._listener.add_callback(self.channel_name, self._notification_handler)
-        await self._listener.startup()
-        self._listener.listen()
-
         self._queue = asyncio.Queue()
+
+        # listen to notification channel
+        self._listener = await self._start_listener()
+        self._listener_task = asyncio.create_task(self._consume_notifications())
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
         await super().shutdown()
+        if self._listener_task is not None:
+            self._listener_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._listener_task
+            self._listener_task = None
+        if self._listener is not None:
+            await self._listener.shutdown()
         if self._read_conn is not None and self._owns_read_conn:
             self._read_conn.close()
         if self._write_pool is not None and self._owns_write_pool:
             self._write_pool.close()
-        if self._listener is not None:
-            self._listener.abort_listen()
-            await self._listener.shutdown()
+
+    async def _start_listener(self) -> psqlpy.Listener:
+        """Create a listener on a pool connection and LISTEN on the channel."""
+        listener = self._write_pool.listener()
+        try:
+            await listener.add_callback(self.channel_name, self._subscribe_only)
+            await listener.startup()
+        except BaseException:
+            with suppress(Exception):
+                await listener.shutdown()
+            raise
+        return listener
+
+    async def _subscribe_only(
+        self,
+        connection: psqlpy.Connection,
+        payload: str,
+        channel: str,
+        process_id: int,
+    ) -> None:
+        """
+        Subscribe the listener to the channel.
+
+        When a listener is iterated, psqlpy delivers notifications through the iterator
+        and does not call callbacks, but a callback is still required to LISTEN on a channel.
+        """
+
+    async def _consume_notifications(self) -> None:
+        """Move notifications into the queue and restore LISTEN after connection loss."""
+        while True:
+            try:
+                async for message in self._listener:
+                    await self._notification_handler(
+                        message.connection,
+                        message.payload,
+                        message.channel,
+                        message.process_id,
+                    )
+            except Exception:
+                logger.warning("LISTEN connection lost on channel %s; reconnecting", self.channel_name, exc_info=True)
+            else:
+                logger.warning("LISTEN stopped on channel %s; reconnecting", self.channel_name)
+            with suppress(Exception):
+                await self._listener.shutdown()
+            self._listener = await self._restore_listener()
+
+    async def _restore_listener(self) -> psqlpy.Listener:
+        """Create a new listener, retrying with randomized delays of up to 30 seconds."""
+        delays = retry_delays()
+        while True:
+            try:
+                listener = await self._start_listener()
+            except Exception:  # noqa: PERF203
+                delay = next(delays)
+                logger.warning("LISTEN reconnect failed; retrying in %.1f seconds", delay, exc_info=True)
+                await asyncio.sleep(delay)
+            else:
+                logger.info("LISTEN connection restored on channel %s", self.channel_name)
+                return listener
 
     async def _notification_handler(
         self,
