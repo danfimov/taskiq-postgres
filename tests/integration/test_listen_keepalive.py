@@ -149,3 +149,46 @@ async def test_when_server_closes_idle_sessions_without_keepalive__then_listen_c
     # then
     assert original
     assert not after, "Without keepalive the server should have closed the idle LISTEN connection"
+
+
+@pytest.mark.integration
+async def test_when_psycopg_keepalive_query_ignores_cancellation__then_hang_is_detected_in_time(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A cancelled psycopg query waits for the server to acknowledge it, which a hung connection never does.
+
+    The broker must not wait for that: the stub below ignores the first cancellation like such a query.
+    """
+    # given
+    channel = f"keepalive_{uuid.uuid4().hex}"
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, **FAST_KEEPALIVE)
+    keepalive_query = broker._keepalive_query  # noqa: SLF001
+    hung = asyncio.Event()
+
+    async def stubborn_once() -> None:
+        if not hung.is_set():
+            hung.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await asyncio.sleep(10)  # keeps "waiting for the server" after being cancelled
+                raise
+        await keepalive_query()
+
+    monkeypatch.setattr(broker, "_keepalive_query", stubborn_once)
+    await broker.startup()
+    listener = broker.listen()
+    task: asyncio.Task[tp.Any] = asyncio.create_task(listener.__anext__())
+    try:
+        original = await listen_backends(connection, channel)
+        await asyncio.wait_for(hung.wait(), timeout=5)
+
+        # when / then
+        await asyncio.wait_for(wait_until_gone(connection, original), timeout=3)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await broker.shutdown()
