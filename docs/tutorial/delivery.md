@@ -116,10 +116,6 @@ only runs the statements for the parts that are missing, so an application role 
 `UPDATE` and `DELETE` privileges (and `USAGE` on the id sequence) works with a table that was prepared in advance,
 see [Common Issues](common_issues.md#table-creation-issues).
 
-!!! warning "Rolling upgrade with psqlpy"
-    Once a new version adds the columns, workers of older versions that use `PSQLPyBroker` fail to read claimed
-    messages, and those messages stay in `processing`. Stop the old psqlpy workers before starting the new ones.
-
 ## Known limitations
 
 - **aiopg pool.** aiopg opens new pool connections while holding a pool-wide lock. If opening a connection hangs
