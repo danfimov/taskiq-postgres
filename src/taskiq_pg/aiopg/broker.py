@@ -7,9 +7,9 @@ from collections.abc import AsyncGenerator, Callable
 import aiopg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
-from taskiq_pg._internal.tasks import cancel_and_wait
+from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.aiopg.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -47,6 +47,8 @@ class AiopgBroker(BasePostgresBroker):
         *,
         write_pool: None = ...,
         read_connection: None = ...,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -63,6 +65,8 @@ class AiopgBroker(BasePostgresBroker):
         *,
         write_pool: aiopg.Pool,
         read_connection: None = ...,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -79,6 +83,8 @@ class AiopgBroker(BasePostgresBroker):
         *,
         write_pool: None = ...,
         read_connection: aiopg.Connection,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -95,6 +101,8 @@ class AiopgBroker(BasePostgresBroker):
         *,
         write_pool: aiopg.Pool,
         read_connection: aiopg.Connection,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     def __init__(  # noqa: PLR0913
@@ -110,6 +118,8 @@ class AiopgBroker(BasePostgresBroker):
         *,
         write_pool: aiopg.Pool | None = None,
         read_connection: aiopg.Connection | None = None,
+        listen_keepalive_interval: float | None = 30.0,
+        listen_keepalive_timeout: float = 5.0,
     ) -> None:
         """
         Construct a new AiopgBroker.
@@ -126,6 +136,9 @@ class AiopgBroker(BasePostgresBroker):
             write_pool: An existing connection pool to reuse for writes.
             read_connection: An existing connection to reuse for LISTEN.
                 Its lifecycle, including reconnection, remains the caller's responsibility.
+            listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
+                with a query; None disables the check.
+            listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
         """
         super().__init__(
             dsn=dsn,
@@ -136,6 +149,8 @@ class AiopgBroker(BasePostgresBroker):
             max_retry_attempts=max_retry_attempts,
             read_kwargs=read_kwargs,
             write_kwargs=write_kwargs,
+            listen_keepalive_interval=listen_keepalive_interval,
+            listen_keepalive_timeout=listen_keepalive_timeout,
         )
 
         self._owns_write_pool = True
@@ -203,11 +218,10 @@ class AiopgBroker(BasePostgresBroker):
         while self._read_conn is not None:
             conn = self._read_conn
             try:
-                while True:
-                    notify = await conn.notifies.get()
-                    logger.debug("Received notification on channel %s: %s", notify.channel, notify.payload)
-                    if self._queue is not None:
-                        self._queue.put_nowait(notify.payload)
+                if self.listen_keepalive_interval is None or not self._owns_read_conn:
+                    await self._move_notifications(conn)
+                else:
+                    await run_until_first_done(self._move_notifications(conn), self._keepalive())
             except Exception:
                 if not self._owns_read_conn:
                     logger.warning(
@@ -219,6 +233,32 @@ class AiopgBroker(BasePostgresBroker):
                 logger.warning("LISTEN connection lost on channel %s; reconnecting", self.channel_name, exc_info=True)
             await conn.close()
             self._read_conn = await self._restore_listener()
+
+    async def _move_notifications(self, conn: aiopg.Connection) -> None:
+        """Move notifications into the queue until the connection is lost."""
+        while True:
+            notify = await conn.notifies.get()
+            logger.debug("Received notification on channel %s: %s", notify.channel, notify.payload)
+            if self._queue is not None:
+                self._queue.put_nowait(notify.payload)
+
+    async def _keepalive(self) -> None:
+        """Run the keepalive query every interval; raise when it does not answer in time."""
+        interval = self.listen_keepalive_interval
+        if interval is None:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await asyncio.wait_for(self._keepalive_query(), self.listen_keepalive_timeout)
+            except TimeoutError as exc:
+                msg = "LISTEN connection did not answer a keepalive query"
+                raise ConnectionError(msg) from exc
+
+    async def _keepalive_query(self) -> None:
+        """Run a trivial query on the LISTEN connection."""
+        if self._read_conn is not None:
+            await self._execute(self._read_conn, LISTEN_KEEPALIVE_QUERY)
 
     async def _restore_listener(self) -> aiopg.Connection:
         """Open a new LISTEN connection, retrying with randomized delays of up to 30 seconds."""

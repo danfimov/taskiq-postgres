@@ -8,12 +8,13 @@ from taskiq import BrokerMessage
 
 from tests.integration.test_listener_reconnect import listen_backends
 
+from taskiq_pg.aiopg import AiopgBroker
 from taskiq_pg.asyncpg import AsyncpgBroker
 from taskiq_pg.psqlpy import PSQLPyBroker
 from taskiq_pg.psycopg import PsycopgBroker
 
 
-Broker: tp.TypeAlias = AsyncpgBroker | PsycopgBroker | PSQLPyBroker
+Broker: tp.TypeAlias = AsyncpgBroker | PsycopgBroker | PSQLPyBroker | AiopgBroker
 
 FAST_KEEPALIVE: dict[str, tp.Any] = {"listen_keepalive_interval": 0.2, "listen_keepalive_timeout": 0.5}
 
@@ -33,11 +34,12 @@ async def wait_until_gone(connection: asyncpg.Connection, pids: set[int]) -> Non
 IDLE_TIMEOUT_READ_KWARGS: list[tp.Any] = [
     pytest.param(AsyncpgBroker, {"server_settings": {"idle_session_timeout": "1000"}}, id="AsyncpgBroker"),
     pytest.param(PsycopgBroker, {"options": "-c idle_session_timeout=1000"}, id="PsycopgBroker"),
+    pytest.param(AiopgBroker, {"options": "-c idle_session_timeout=1000"}, id="AiopgBroker"),
 ]
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("broker_class", [AsyncpgBroker, PsycopgBroker, PSQLPyBroker])
+@pytest.mark.parametrize("broker_class", [AsyncpgBroker, PsycopgBroker, PSQLPyBroker, AiopgBroker])
 async def test_when_keepalive_query_hangs__then_listener_reconnects(
     pg_dsn: str,
     connection: asyncpg.Connection,
