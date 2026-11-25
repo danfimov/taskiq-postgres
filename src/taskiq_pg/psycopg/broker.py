@@ -329,13 +329,15 @@ class PsycopgBroker(BasePostgresBroker):
         for task in list(self._notify_tasks):
             await cancel_and_wait(task)
         await super().shutdown()
-        if self._notifies_iter is not None:
+        # startup() may have failed before creating any of these
+        notifies_iter = getattr(self, "_notifies_iter", None)
+        if notifies_iter is not None:
             with suppress(RuntimeError):  # RuntimeError: aclose(): asynchronous generator is already running
-                await self._notifies_iter.aclose()  # type: ignore[attr-defined]
-        if self._read_conn is not None and self._owns_read_conn:
+                await notifies_iter.aclose()
+        if getattr(self, "_read_conn", None) is not None and self._owns_read_conn:
             await self._read_conn.notifies().aclose()
             await self._close_read_conn()
-        if self._write_pool is not None and self._owns_write_pool:
+        if getattr(self, "_write_pool", None) is not None and self._owns_write_pool:
             await self._write_pool.close()
 
     async def kick(self, message: BrokerMessage) -> None:
