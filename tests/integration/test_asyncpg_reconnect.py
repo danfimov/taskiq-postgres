@@ -1,10 +1,11 @@
 import asyncio
 import typing as tp
 import uuid
+from urllib.parse import urlsplit
 
 import asyncpg
 import pytest
-from taskiq import BrokerMessage, TaskiqEvents, TaskiqState
+from taskiq import BrokerMessage
 
 from taskiq_pg.asyncpg import AsyncpgBroker
 
@@ -151,49 +152,34 @@ async def test_listener_recovers_when_resubscription_fails(
 
 
 @pytest.mark.integration
-async def test_shutdown_cleans_up_after_listener_task_failure(
+async def test_listener_keeps_retrying_after_unexpected_error(
     pg_dsn: str,
     connection: asyncpg.Connection,
 ) -> None:
-    """Clean up resources and propagate a failed listener task's original error."""
+    """Keep restoring LISTEN when a reconnect attempt fails with an error outside asyncpg."""
     broker = AsyncpgBroker(dsn=pg_dsn)
-    shutdown_called = asyncio.Event()
-
-    @broker.on_event(TaskiqEvents.CLIENT_SHUTDOWN)
-    async def on_shutdown(_state: TaskiqState) -> None:
-        """Record that the base broker shutdown handlers were executed."""
-        shutdown_called.set()
-
     await broker.startup()
-    read_conn = broker._read_conn  # noqa: SLF001
-    pool = broker._write_pool  # noqa: SLF001
-    listener_task = broker._listener_task  # noqa: SLF001
-    assert read_conn is not None
-    assert pool is not None
-    assert listener_task is not None
-    failure = RuntimeError("Password provider failed")
+    original = broker._read_conn  # noqa: SLF001
+    assert original is not None
+    password = urlsplit(pg_dsn).password
+    calls = 0
 
-    def unavailable_password() -> str:
-        """Raise a non-retryable error during a real reconnect attempt."""
-        raise failure
+    def flaky_password() -> str | None:
+        """Fail like a broken secret provider once, then return the real password."""
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            msg = "Password provider failed"
+            raise RuntimeError(msg)
+        return password
 
-    broker.read_kwargs["password"] = unavailable_password
+    broker.read_kwargs["password"] = flaky_password
     try:
-        await connection.execute("SELECT pg_terminate_backend($1)", read_conn.get_server_pid())
-        with pytest.raises(RuntimeError, match="Password provider failed"):
-            await asyncio.wait_for(asyncio.shield(listener_task), timeout=5)
-        with pytest.raises(RuntimeError, match="Password provider failed") as raised:
-            await asyncio.wait_for(broker.shutdown(), timeout=5)
-        assert raised.value is failure
-        assert shutdown_called.is_set()
-        assert read_conn.is_closed()
-        assert pool.is_closing()
-        assert broker._read_conn is None  # noqa: SLF001
-        assert broker._write_pool is None  # noqa: SLF001
-        assert broker._listener_task is None  # noqa: SLF001
-        await asyncio.wait_for(broker.shutdown(), timeout=5)
+        await connection.execute("SELECT pg_terminate_backend($1)", original.get_server_pid())
+        await wait_for_listener(broker, original)
+        assert calls == 2
+        listener_task = broker._listener_task  # noqa: SLF001
+        assert listener_task is not None
+        assert not listener_task.done()
     finally:
-        listener_task.cancel()
-        await asyncio.gather(listener_task, return_exceptions=True)
-        read_conn.terminate()
-        pool.terminate()
+        await broker.shutdown()

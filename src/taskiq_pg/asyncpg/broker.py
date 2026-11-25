@@ -217,7 +217,7 @@ class AsyncpgBroker(BasePostgresBroker):
             while True:
                 try:
                     await self._connect_listener()
-                except (OSError, asyncio.TimeoutError, asyncpg.PostgresError, asyncpg.InterfaceError):  # noqa: PERF203
+                except Exception:  # noqa: PERF203
                     logger.warning("LISTEN reconnect failed; retrying in %s seconds", delay, exc_info=True)
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 30.0)
