@@ -108,3 +108,21 @@ def schema_lock_query(table_name: str) -> str:
     """
     digest = hashlib.sha256(f"taskiq_pg:messages:{table_name}".encode()).digest()
     return f"SELECT pg_advisory_xact_lock({int.from_bytes(digest[:8], 'big', signed=True)})"
+
+
+SCHEMA_STATUS_QUERY = """
+SELECT
+    to_regclass({table}) IS NOT NULL AS has_table,
+    (
+        SELECT count(*) FROM pg_attribute
+        WHERE attrelid = to_regclass({table}) AND attname IN ('claimed_at', 'attempts') AND NOT attisdropped
+    ) = 2 AS has_delivery_columns,
+    to_regclass({pending_index}) IS NOT NULL AS has_pending_index,
+    to_regclass({processing_index}) IS NOT NULL AS has_processing_index
+"""
+"""
+Query that tells which parts of the messages table already exist.
+
+Brokers run DDL only for the missing parts: `ALTER TABLE` and `CREATE INDEX` require owning the table even with
+`IF NOT EXISTS`, so a role with only DML privileges can use a table that was prepared in advance.
+"""
