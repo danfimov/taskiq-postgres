@@ -11,12 +11,14 @@ from psqlpy.exceptions import ConnectionExecuteError
 from psqlpy.extra_types import JSONB
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.psqlpy.queries import (
     CLAIM_MESSAGE_QUERY,
+    CLAIM_NEXT_READY_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
+    CREATE_PENDING_INDEX_QUERY,
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
 )
@@ -114,6 +116,9 @@ class PSQLPyBroker(BasePostgresBroker):
         # create messages table if it doesn't exist
         async with self._write_pool.acquire() as conn:
             await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+            await conn.execute(
+                CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
+            )
 
         self._queue = asyncio.Queue()
 
@@ -173,6 +178,7 @@ class PSQLPyBroker(BasePostgresBroker):
             with suppress(Exception):
                 await self._listener.shutdown()
             self._listener = await self._restore_listener()
+            self._queue.put_nowait(POLL_NOW)  # notifications sent while reconnecting were missed
 
     async def _move_notifications(self, listener: psqlpy.Listener) -> None:
         """Move notifications from the listener into the queue until it stops or its connection is lost."""
@@ -281,32 +287,51 @@ class PSQLPyBroker(BasePostgresBroker):
 
         :yields: AckableMessage instances.
         """
+        loop = asyncio.get_running_loop()
+        next_poll = loop.time()  # poll right away: messages may have been kicked while nobody listened
         while True:
             try:
-                payload = await self._queue.get()
-                message_id = int(payload)  # payload is the message id
-                try:
-                    async with self._write_pool.acquire() as conn:
-                        claimed_message = await conn.fetch_row(
-                            CLAIM_MESSAGE_QUERY.format(self.table_name),
-                            [message_id],
-                        )
-                except ConnectionExecuteError:  # message was claimed by another worker
+                if loop.time() >= next_poll:
+                    next_poll = loop.time() + self.poll_interval
+                    while (claimed := await self._claim_next_ready()) is not None:
+                        yield self._ackable(claimed)
                     continue
-                message_row_result = tp.cast(
-                    "MessageRow",
-                    tp.cast("object", claimed_message.as_class(MessageRow)),
-                )
-                message_data = message_row_result.message.encode()
-
-                async def ack(*, _message_id: int = message_id) -> None:
-                    async with self._write_pool.acquire() as conn:
-                        _ = await conn.execute(
-                            DELETE_MESSAGE_QUERY.format(self.table_name),
-                            [_message_id],
-                        )
-
-                yield AckableMessage(data=message_data, ack=ack)
+                try:
+                    payload = await asyncio.wait_for(self._queue.get(), next_poll - loop.time())
+                except TimeoutError:
+                    continue
+                if payload == POLL_NOW:
+                    next_poll = loop.time()
+                    continue
+                claimed = await self._claim(int(payload))  # payload is the message id
+                if claimed is not None:
+                    yield self._ackable(claimed)
             except Exception:
                 logger.exception("Error processing message")
                 continue
+
+    async def _claim(self, message_id: int) -> MessageRow | None:
+        """Claim a pending message by its id."""
+        try:
+            async with self._write_pool.acquire() as conn:
+                claimed_message = await conn.fetch_row(CLAIM_MESSAGE_QUERY.format(self.table_name), [message_id])
+        except ConnectionExecuteError:  # message was claimed by another worker
+            return None
+        return tp.cast("MessageRow", tp.cast("object", claimed_message.as_class(MessageRow)))
+
+    async def _claim_next_ready(self) -> MessageRow | None:
+        """Claim the oldest pending message that is ready (its delay, if any, has elapsed)."""
+        async with self._write_pool.acquire() as conn:
+            result = await conn.fetch(CLAIM_NEXT_READY_MESSAGE_QUERY.format(table=self.table_name))
+        rows = tp.cast("list[MessageRow]", result.as_class(MessageRow))
+        return rows[0] if rows else None
+
+    def _ackable(self, claimed: MessageRow) -> AckableMessage:
+        """Wrap a claimed message; acknowledging it deletes the row."""
+        message_id = claimed.id
+
+        async def ack() -> None:
+            async with self._write_pool.acquire() as conn:
+                await conn.execute(DELETE_MESSAGE_QUERY.format(self.table_name), [message_id])
+
+        return AckableMessage(data=claimed.message.encode(), ack=ack)
