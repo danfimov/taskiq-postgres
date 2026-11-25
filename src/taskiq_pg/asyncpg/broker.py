@@ -3,13 +3,13 @@ import json
 import logging
 import typing as tp
 from collections.abc import AsyncGenerator, Callable
-from contextlib import suppress
 
 import asyncpg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
+from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.asyncpg.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -163,9 +163,7 @@ class AsyncpgBroker(BasePostgresBroker):
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
         if self._listener_task is not None:
-            self._listener_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._listener_task
+            await cancel_and_wait(self._listener_task)
             self._listener_task = None
         await super().shutdown()
         if self._read_conn is not None:
