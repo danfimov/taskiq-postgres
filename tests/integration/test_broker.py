@@ -1,4 +1,5 @@
 import asyncio
+import time
 import typing as tp
 import uuid
 
@@ -178,3 +179,33 @@ async def test_when_delayed_message_was_published__then_worker_received_message(
         assert task.result().data == message.message
     finally:
         task.cancel()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "broker",
+    [
+        AsyncpgBroker,
+        PSQLPyBroker,
+        PsycopgBroker,
+        AiopgBroker,
+    ],
+    indirect=True,
+)
+async def test_when_delayed_message_was_published__then_kick_does_not_wait_for_the_delay(
+    broker,
+) -> None:
+    # given
+    message: BrokerMessage = BrokerMessage(
+        task_id=uuid.uuid4().hex,
+        task_name="example:delayed_task",
+        message=b'{"hello":"later"}',
+        labels={"delay": 3},
+    )
+
+    # when
+    started = time.monotonic()
+    await broker.kick(message)
+
+    # then
+    assert time.monotonic() - started < 1, "kick() must return before the delay elapses"

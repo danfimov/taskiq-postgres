@@ -12,6 +12,7 @@ from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
+from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.psycopg.queries import (
     CLAIM_MESSAGE_QUERY,
     CLAIM_NEXT_READY_MESSAGE_QUERY,
@@ -181,6 +182,8 @@ class PsycopgBroker(BasePostgresBroker):
             self._read_conn = read_connection
             self._owns_read_conn = False
 
+        self._notify_tasks: set[asyncio.Task[None]] = set()
+
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
@@ -269,6 +272,8 @@ class PsycopgBroker(BasePostgresBroker):
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
         self._closing = True
+        for task in list(self._notify_tasks):
+            await cancel_and_wait(task)
         await super().shutdown()
         if self._notifies_iter is not None:
             with suppress(RuntimeError):  # RuntimeError: aclose(): asynchronous generator is already running
@@ -317,7 +322,11 @@ class PsycopgBroker(BasePostgresBroker):
 
         # The insert is committed once the connection is returned to the pool,
         # so a delayed NOTIFY sent from here never reaches a worker before the row is visible.
-        await self._schedule_notification(message_inserted_id, int(delay_value))
+        # The NOTIFY is only the fast path: workers also poll for messages whose delay has elapsed,
+        # so the message is delivered even if this producer exits before sending it.
+        task = asyncio.create_task(self._schedule_notification(message_inserted_id, int(delay_value)))
+        self._notify_tasks.add(task)
+        task.add_done_callback(self._notify_tasks.discard)
 
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
