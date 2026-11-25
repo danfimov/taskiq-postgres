@@ -26,11 +26,6 @@ is left behind, every listening worker also **polls** the table:
 Polling claims the oldest ready message with `FOR UPDATE SKIP LOCKED`, so workers never claim the same row, and a
 backlog is drained without waiting between messages.
 
-!!! note "After upgrading"
-    Workers poll messages that are already in the table, too. If earlier versions left messages stuck in
-    `pending`, they are executed right after the upgrade. With `processing_timeout` (see below), messages stuck in
-    `processing` are delivered again as well. Delete them first if they should not run.
-
 ## Connection failures
 
 Each broker keeps one connection for `LISTEN` and a pool for everything else. When the LISTEN connection is
@@ -92,24 +87,11 @@ row stays in the table for you to inspect.
 | `processing_timeout` | `None` | Seconds after which an unacknowledged message is delivered again; `None` keeps at-most-once delivery. |
 | `max_retry_attempts` | `5` | With `processing_timeout`, how many times a message may be claimed before it is marked as `failed`. |
 
-## Schema changes
+## Schema setup
 
-On startup, the broker creates the messages table if it does not exist and brings an existing table up to date:
-
-- it adds the `claimed_at` and `attempts` columns, which is instant even for a large table;
-- it creates a partial index on pending messages (`<table>_pending_idx`) and, with `processing_timeout`, on
-  processing messages (`<table>_processing_idx`).
-
-Building an index on a large existing table blocks writes to it until the index is ready. To avoid that, create
-the indexes yourself before upgrading:
-
-```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS taskiq_messages_pending_idx
-    ON taskiq_messages (id) WHERE status = 'pending';
--- only if you use processing_timeout
-CREATE INDEX CONCURRENTLY IF NOT EXISTS taskiq_messages_processing_idx
-    ON taskiq_messages (claimed_at) WHERE status = 'processing';
-```
+On startup, the broker creates the parts of its schema that are missing: the messages table and its columns,
+a partial index on pending messages (`<table>_pending_idx`) and, with `processing_timeout`, a partial index on
+processing messages (`<table>_processing_idx`).
 
 Schema setup is serialized with an advisory lock, so many workers can start at the same time. The broker
 only runs the statements for the parts that are missing, so an application role with only `SELECT`, `INSERT`,
