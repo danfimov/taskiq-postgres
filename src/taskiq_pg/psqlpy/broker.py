@@ -165,9 +165,11 @@ class PSQLPyBroker(BasePostgresBroker):
         if self._listener_task is not None:
             await cancel_and_wait(self._listener_task)
             self._listener_task = None
-        if self._listener is not None:
-            await self._listener.shutdown()
-        if self._write_pool is not None and self._owns_write_pool:
+        # startup() may have failed before creating these
+        listener = getattr(self, "_listener", None)
+        if listener is not None:
+            await listener.shutdown()
+        if getattr(self, "_write_pool", None) is not None and self._owns_write_pool:
             self._write_pool.close()
 
     async def _start_listener(self) -> psqlpy.Listener:
