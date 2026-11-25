@@ -183,3 +183,49 @@ async def test_listener_keeps_retrying_after_unexpected_error(
         assert not listener_task.done()
     finally:
         await broker.shutdown()
+
+
+SUPPLIED_CONNECTION_CLOSED = "Supplied LISTEN connection"
+
+
+@pytest.mark.integration
+async def test_when_supplied_read_connection_was_terminated__then_warning_is_logged(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Warn that a supplied LISTEN connection is lost, since the broker does not restore it."""
+    read_connection = await asyncpg.connect(pg_dsn)
+    broker = AsyncpgBroker(dsn=pg_dsn, read_connection=read_connection)
+    await broker.startup()
+    try:
+        with caplog.at_level("WARNING", logger="taskiq.asyncpg_broker"):
+            await connection.execute("SELECT pg_terminate_backend($1)", read_connection.get_server_pid())
+
+            async def warned() -> None:
+                while SUPPLIED_CONNECTION_CLOSED not in caplog.text:  # noqa: ASYNC110
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(warned(), timeout=5)
+        assert broker._read_conn is read_connection  # noqa: SLF001
+    finally:
+        await broker.shutdown()
+        await read_connection.close()
+
+
+@pytest.mark.integration
+async def test_when_supplied_read_connection_is_closed_after_shutdown__then_no_warning_is_logged(
+    pg_dsn: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Closing a supplied connection after shutdown is the caller's normal cleanup, not a failure."""
+    read_connection = await asyncpg.connect(pg_dsn)
+    broker = AsyncpgBroker(dsn=pg_dsn, read_connection=read_connection)
+    await broker.startup()
+    await broker.shutdown()
+
+    with caplog.at_level("WARNING", logger="taskiq.asyncpg_broker"):
+        await read_connection.close()
+        await asyncio.sleep(0.1)
+
+    assert SUPPLIED_CONNECTION_CLOSED not in caplog.text

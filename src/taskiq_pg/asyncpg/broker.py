@@ -203,8 +203,16 @@ class AsyncpgBroker(BasePostgresBroker):
         conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     ) -> None:
         """Notify the background task when the current LISTEN connection closes."""
-        if self._owns_read_conn and conn is self._read_conn:
+        if conn is not self._read_conn:
+            return
+        if self._owns_read_conn:
             self._listener_disconnected.set()
+        else:
+            logger.warning(
+                "Supplied LISTEN connection on channel %s was closed; the broker does not restore it, "
+                "no messages will be received until the caller reconnects",
+                self.channel_name,
+            )
 
     async def _restore_listener(self) -> None:
         """Restore LISTEN after disconnection, retrying with randomized delays of up to 30 seconds."""
