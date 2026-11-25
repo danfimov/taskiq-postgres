@@ -152,16 +152,12 @@ class AsyncpgBroker(BasePostgresBroker):
         await super().startup()
         self._queue = asyncio.Queue()
         self._listener_disconnected = asyncio.Event()
-        try:
-            if self._write_pool is None:
-                self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
-            async with self._write_pool.acquire() as conn:
-                await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
-            await self._connect_listener()
-            self._listener_task = asyncio.create_task(self._restore_listener())
-        except BaseException:
-            await self.shutdown()
-            raise
+        if self._write_pool is None:
+            self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
+        async with self._write_pool.acquire() as conn:
+            await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+        await self._connect_listener()
+        self._listener_task = asyncio.create_task(self._restore_listener())
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
