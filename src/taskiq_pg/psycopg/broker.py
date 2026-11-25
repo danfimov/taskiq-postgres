@@ -10,7 +10,7 @@ from psycopg import AsyncConnection, AsyncRawCursor, sql
 from psycopg_pool import AsyncConnectionPool
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg.psycopg.queries import (
     CLAIM_MESSAGE_QUERY,
@@ -49,6 +49,8 @@ class PsycopgBroker(BasePostgresBroker):
         *,
         write_pool: None = ...,
         read_connection: None = ...,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -65,6 +67,8 @@ class PsycopgBroker(BasePostgresBroker):
         *,
         write_pool: AsyncConnectionPool,
         read_connection: None = ...,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -81,6 +85,8 @@ class PsycopgBroker(BasePostgresBroker):
         *,
         write_pool: None = ...,
         read_connection: AsyncConnection,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     @tp.overload
@@ -97,6 +103,8 @@ class PsycopgBroker(BasePostgresBroker):
         *,
         write_pool: AsyncConnectionPool,
         read_connection: AsyncConnection,
+        listen_keepalive_interval: float | None = ...,
+        listen_keepalive_timeout: float = ...,
     ) -> None: ...
 
     def __init__(  # noqa: PLR0913
@@ -112,6 +120,8 @@ class PsycopgBroker(BasePostgresBroker):
         *,
         write_pool: AsyncConnectionPool | None = None,
         read_connection: AsyncConnection | None = None,
+        listen_keepalive_interval: float | None = 30.0,
+        listen_keepalive_timeout: float = 5.0,
     ) -> None:
         """
         Construct a new PsycopgBroker.
@@ -128,6 +138,9 @@ class PsycopgBroker(BasePostgresBroker):
             write_pool: An existing connection pool to reuse for writes.
             read_connection: An existing connection to reuse for LISTEN.
                 Its lifecycle, including reconnection, remains the caller's responsibility.
+            listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
+                with a query; None disables the check.
+            listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
         """
         super().__init__(
             dsn=dsn,
@@ -138,6 +151,8 @@ class PsycopgBroker(BasePostgresBroker):
             max_retry_attempts=max_retry_attempts,
             read_kwargs=read_kwargs,
             write_kwargs=write_kwargs,
+            listen_keepalive_interval=listen_keepalive_interval,
+            listen_keepalive_timeout=listen_keepalive_timeout,
         )
 
         self._owns_write_pool = True
@@ -287,11 +302,39 @@ class PsycopgBroker(BasePostgresBroker):
                 )
             )
 
+    async def _notifications(self) -> AsyncGenerator[str, None]:
+        """
+        Yield notification payloads from the current LISTEN connection.
+
+        A broker-owned connection is read in slices of `listen_keepalive_interval` seconds with a
+        keepalive query in between; a query that does not answer in time raises OperationalError.
+        """
+        interval = self.listen_keepalive_interval
+        if interval is None or not self._owns_read_conn:
+            async for notify in self._notifies_iter:
+                yield notify.payload
+            return
+        while not self._is_closing():
+            self._notifies_iter = self._read_conn.notifies(timeout=interval)
+            async for notify in self._notifies_iter:
+                yield notify.payload
+            if self._is_closing():
+                return
+            try:
+                await asyncio.wait_for(self._keepalive_query(), self.listen_keepalive_timeout)
+            except TimeoutError as exc:
+                msg = "LISTEN connection did not answer a keepalive query"
+                raise psycopg.OperationalError(msg) from exc
+
+    async def _keepalive_query(self) -> None:
+        """Run a trivial query on the LISTEN connection."""
+        await self._read_conn.execute(LISTEN_KEEPALIVE_QUERY)
+
     async def _listen_context(self) -> AsyncGenerator[str, None]:
         while True:
             try:
-                async for notify in self._notifies_iter:
-                    yield notify.payload
+                async for payload in self._notifications():
+                    yield payload
             except psycopg.OperationalError:  # noqa: PERF203
                 if self._closing:  # the connection was closed by shutdown()
                     return

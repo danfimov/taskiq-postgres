@@ -3,9 +3,10 @@ import typing as tp
 import pytest
 
 from taskiq_pg.asyncpg import AsyncpgBroker
+from taskiq_pg.psycopg import PsycopgBroker
 
 
-BROKERS: list[tp.Any] = [AsyncpgBroker]
+BROKERS: list[tp.Any] = [AsyncpgBroker, PsycopgBroker]
 
 
 @pytest.mark.unit
