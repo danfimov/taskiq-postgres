@@ -31,6 +31,30 @@ async def wait_until_gone(connection: asyncpg.Connection, pids: set[int]) -> Non
         await asyncio.sleep(0.05)
 
 
+async def kick_until_received(broker: Broker, task: asyncio.Task[tp.Any], timeout: float) -> set[bytes]:
+    """
+    Kick messages until the worker receives one and return the kicked payloads.
+
+    The replacement LISTEN connection may not be listening yet when the old one is gone,
+    and PostgreSQL drops a NOTIFY sent before LISTEN.
+    """
+    kicked: set[bytes] = set()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not task.done() and loop.time() < deadline:
+        payload = f'{{"restored":{len(kicked)}}}'.encode()
+        message = BrokerMessage(
+            task_id=uuid.uuid4().hex,
+            task_name="example:after_keepalive",
+            message=payload,
+            labels={},
+        )
+        await broker.kick(message)
+        kicked.add(payload)
+        await asyncio.wait({task}, timeout=0.3)
+    return kicked
+
+
 IDLE_TIMEOUT_READ_KWARGS: list[tp.Any] = [
     pytest.param(AsyncpgBroker, {"server_settings": {"idle_session_timeout": "1000"}}, id="AsyncpgBroker"),
     pytest.param(PsycopgBroker, {"options": "-c idle_session_timeout=1000"}, id="PsycopgBroker"),
@@ -71,18 +95,11 @@ async def test_when_keepalive_query_hangs__then_listener_reconnects(
         # when
         await asyncio.wait_for(hung.wait(), timeout=5)
         await asyncio.wait_for(wait_until_gone(connection, original), timeout=5)
-        message = BrokerMessage(
-            task_id=uuid.uuid4().hex,
-            task_name="example:after_keepalive",
-            message=b'{"restored":true}',
-            labels={},
-        )
-        await broker.kick(message)
-        done, _ = await asyncio.wait({task}, timeout=5.0)
+        kicked = await kick_until_received(broker, task, timeout=10.0)
 
         # then
-        assert task in done, "Worker should receive a message kicked after the hung connection was replaced"
-        assert task.result().data == message.message
+        assert task.done(), "Worker should receive a message kicked after the hung connection was replaced"
+        assert task.result().data in kicked
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
