@@ -7,7 +7,13 @@ from collections.abc import AsyncGenerator, Callable
 import asyncpg
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, POLL_NOW, BasePostgresBroker, schema_lock_query
+from taskiq_pg._internal.broker import (
+    LISTEN_KEEPALIVE_QUERY,
+    POLL_NOW,
+    SCHEMA_STATUS_QUERY,
+    BasePostgresBroker,
+    schema_lock_query,
+)
 from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.asyncpg.queries import (
@@ -193,12 +199,24 @@ class AsyncpgBroker(BasePostgresBroker):
             self._write_pool = await asyncpg.create_pool(self.dsn, **self.write_kwargs)
         async with self._write_pool.acquire() as conn, conn.transaction():
             await conn.execute(schema_lock_query(self.table_name))
-            await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
-            await conn.execute(ADD_DELIVERY_COLUMNS_QUERY.format(table=self.table_name))
-            await conn.execute(
-                CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
+            status = await conn.fetchrow(
+                SCHEMA_STATUS_QUERY.format(table="$1", pending_index="$2", processing_index="$3"),
+                self.table_name,
+                f"{self.table_name}_pending_idx",
+                f"{self.table_name}_processing_idx",
             )
-            if self.processing_timeout is not None:
+            if status is None:
+                msg = "schema status query returned no row"
+                raise RuntimeError(msg)
+            if not status["has_table"]:
+                await conn.execute(CREATE_MESSAGE_TABLE_QUERY.format(self.table_name))
+            if not status["has_delivery_columns"]:
+                await conn.execute(ADD_DELIVERY_COLUMNS_QUERY.format(table=self.table_name))
+            if not status["has_pending_index"]:
+                await conn.execute(
+                    CREATE_PENDING_INDEX_QUERY.format(index=f"{self.table_name}_pending_idx", table=self.table_name),
+                )
+            if self.processing_timeout is not None and not status["has_processing_index"]:
                 await conn.execute(
                     CREATE_PROCESSING_INDEX_QUERY.format(
                         index=f"{self.table_name}_processing_idx",
