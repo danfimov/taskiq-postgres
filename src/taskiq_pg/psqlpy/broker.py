@@ -57,7 +57,6 @@ class PSQLPyBroker(BasePostgresBroker):
         channel_name: str = "taskiq",
         table_name: str = "taskiq_messages",
         max_retry_attempts: int = 5,
-        read_kwargs: dict[str, tp.Any] | None = None,
         write_kwargs: dict[str, tp.Any] | None = None,
         *,
         write_pool: psqlpy.ConnectionPool | None = None,
@@ -74,7 +73,6 @@ class PSQLPyBroker(BasePostgresBroker):
             channel_name: Name of the LISTEN/NOTIFY channel.
             table_name: Name of the table used to store messages.
             max_retry_attempts: Maximum number of message processing attempts.
-            read_kwargs: Not used: there is no separate read connection.
             write_kwargs: Extra kwargs forwarded to `psqlpy.ConnectionPool()`
             write_pool: An existing pool to reuse for writes and LISTEN.
         """
@@ -85,7 +83,6 @@ class PSQLPyBroker(BasePostgresBroker):
             channel_name=channel_name,
             table_name=table_name,
             max_retry_attempts=max_retry_attempts,
-            read_kwargs=read_kwargs,
             write_kwargs=write_kwargs,
         )
 
