@@ -69,3 +69,33 @@ def test_when_poll_interval_is_not_positive__then_error_is_raised(broker_class: 
     # when / then
     with pytest.raises(ValueError, match="poll_interval"):
         broker_class(poll_interval=poll_interval)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("broker_class", BROKERS)
+def test_when_broker_is_created__then_delivery_is_at_most_once_by_default(broker_class: tp.Any) -> None:
+    # when
+    broker = broker_class()
+
+    # then
+    assert broker.processing_timeout is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("broker_class", BROKERS)
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"processing_timeout": 0}, "processing_timeout"),
+        ({"processing_timeout": -1}, "processing_timeout"),
+        ({"max_retry_attempts": 0}, "max_retry_attempts"),
+    ],
+)
+def test_when_delivery_settings_are_invalid__then_error_is_raised(
+    broker_class: tp.Any,
+    kwargs: dict[str, float],
+    match: str,
+) -> None:
+    # when / then
+    with pytest.raises(ValueError, match=match):
+        broker_class(**kwargs)

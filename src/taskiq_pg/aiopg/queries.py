@@ -96,14 +96,19 @@ VALUES (%s, %s, %s, %s)
 RETURNING id
 """
 
-CLAIM_MESSAGE_QUERY = "UPDATE {} SET status = 'processing' WHERE id = %s AND status = 'pending' RETURNING id, message"
+CLAIM_MESSAGE_QUERY = """
+UPDATE {} SET status = 'processing', claimed_at = now(), attempts = attempts + 1
+WHERE id = %s AND status = 'pending'
+RETURNING id, message, attempts
+"""
 
-DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = %s"
+# Delete only the claim being acknowledged: after processing_timeout another worker may have claimed the row again.
+DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = %s AND attempts = %s"
 
 CREATE_PENDING_INDEX_QUERY = "CREATE INDEX IF NOT EXISTS {index} ON {table} (id) WHERE status = 'pending'"
 
 CLAIM_NEXT_READY_MESSAGE_QUERY = """
-UPDATE {table} SET status = 'processing'
+UPDATE {table} SET status = 'processing', claimed_at = now(), attempts = attempts + 1
 WHERE id = (
     SELECT id FROM {table}
     WHERE status = 'pending'
@@ -117,5 +122,28 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, message
+RETURNING id, message, attempts
+"""
+
+ADD_DELIVERY_COLUMNS_QUERY = """
+ALTER TABLE {table}
+    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP WITH TIME ZONE,
+    ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0
+"""
+
+CREATE_PROCESSING_INDEX_QUERY = "CREATE INDEX IF NOT EXISTS {index} ON {table} (claimed_at) WHERE status = 'processing'"
+
+RELEASE_STALE_MESSAGES_QUERY = """
+UPDATE {table} SET status = 'pending'
+WHERE status = 'processing'
+    AND COALESCE(claimed_at, created_at) < now() - make_interval(secs => %s)
+    AND attempts < %s
+"""
+
+FAIL_EXHAUSTED_MESSAGES_QUERY = """
+UPDATE {table} SET status = 'failed'
+WHERE status = 'processing'
+    AND COALESCE(claimed_at, created_at) < now() - make_interval(secs => %s)
+    AND attempts >= %s
+RETURNING id, task_id, task_name, attempts
 """

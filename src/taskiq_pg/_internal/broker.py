@@ -31,6 +31,7 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
         listen_keepalive_interval: float | None = 30.0,
         listen_keepalive_timeout: float = 5.0,
         poll_interval: float = 5.0,
+        processing_timeout: float | None = None,
     ) -> None:
         """
         Construct a new broker.
@@ -41,7 +42,8 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
             task_id_generator: Custom task_id generator.
             channel_name: Name of the channel to listen on.
             table_name: Name of the table to store messages.
-            max_retry_attempts: Maximum number of message processing attempts.
+            max_retry_attempts: With processing_timeout set, how many times a message may be claimed
+                before it is marked as failed instead of being delivered again.
             read_kwargs: Additional arguments for read connection creation.
             write_kwargs: Additional arguments for write pool creation.
             listen_keepalive_interval: How often, in seconds, to run a query on the broker-owned LISTEN
@@ -52,6 +54,11 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
             poll_interval: How often, in seconds, a listening worker looks for pending messages whose
                 NOTIFY it missed (sent while it was not listening or reconnecting), including delayed
                 messages whose delay has elapsed. It also polls right after start and after reconnecting.
+            processing_timeout: Enables at-least-once delivery. A claimed message that is neither acknowledged
+                nor rejected within this many seconds (for example, because its worker died) is delivered
+                again, up to max_retry_attempts times. Tasks must then be idempotent, and the timeout must be
+                longer than the longest task. None (the default) keeps at-most-once delivery: such a message
+                stays in the 'processing' state.
         """
         if listen_keepalive_interval is not None and listen_keepalive_interval <= 0:
             msg = "listen_keepalive_interval must be positive or None"
@@ -61,6 +68,12 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
             raise ValueError(msg)
         if poll_interval <= 0:
             msg = "poll_interval must be positive"
+            raise ValueError(msg)
+        if processing_timeout is not None and processing_timeout <= 0:
+            msg = "processing_timeout must be positive or None"
+            raise ValueError(msg)
+        if max_retry_attempts < 1:
+            msg = "max_retry_attempts must be at least 1"
             raise ValueError(msg)
         super().__init__(
             result_backend=result_backend,
@@ -75,6 +88,7 @@ class BasePostgresBroker(AsyncBroker, DsnHelper, abc.ABC):
         self.listen_keepalive_interval: float | None = listen_keepalive_interval
         self.listen_keepalive_timeout: float = listen_keepalive_timeout
         self.poll_interval: float = poll_interval
+        self.processing_timeout: float | None = processing_timeout
         self._queue: asyncio.Queue[str] | None = None
 
 
