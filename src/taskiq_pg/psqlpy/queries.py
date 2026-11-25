@@ -70,7 +70,8 @@ WHERE id = $1 AND status = 'pending'
 RETURNING *
 """
 
-DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = $1"
+# Delete only the claim being acknowledged: after processing_timeout another worker may have claimed the row again.
+DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = $1 AND attempts = $2"
 
 CREATE_SCHEDULES_TABLE_QUERY = """
 CREATE TABLE IF NOT EXISTS {} (

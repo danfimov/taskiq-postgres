@@ -472,12 +472,13 @@ class AsyncpgBroker(BasePostgresBroker):
             msg = "message is not a string"
             raise TypeError(msg)
         message_id = int(claimed["id"])
+        attempts = int(claimed["attempts"])
 
         async def ack() -> None:
             if self._write_pool is None:
                 msg = "Call startup before starting listening."
                 raise ValueError(msg)
             async with self._write_pool.acquire() as conn:
-                await conn.execute(DELETE_MESSAGE_QUERY.format(self.table_name), message_id)
+                await conn.execute(DELETE_MESSAGE_QUERY.format(self.table_name), message_id, attempts)
 
         return AckableMessage(data=message_str.encode(), ack=ack)

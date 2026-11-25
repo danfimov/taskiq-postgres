@@ -194,3 +194,59 @@ async def test_when_table_has_the_old_schema__then_it_is_migrated_and_stuck_mess
     finally:
         await listener.aclose()
         await broker.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("broker_class", BROKERS)
+async def test_when_expired_claim_is_acknowledged__then_message_claimed_again_is_kept(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    broker_class: type[Broker],
+) -> None:
+    # given
+    names = unique_names()
+    table = names["table_name"]
+    broker = broker_class(dsn=pg_dsn, processing_timeout=0.5, **FAST_POLL, **names)
+    await broker.startup()
+    listener = broker.listen()
+    try:
+        await insert_pending(connection, table, '{"n":1}', {})
+        expired = await next_message(listener, timeout=3)
+        await next_message(listener, timeout=5)  # delivered again after processing_timeout
+
+        # when: the slow worker finishes and acknowledges its expired claim
+        await expired.ack()  # type: ignore[misc]
+
+        # then
+        assert await status_of(connection, table, '{"n":1}') == "processing"
+    finally:
+        await listener.aclose()
+        await broker.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("broker_class", BROKERS)
+async def test_when_released_message_is_acknowledged_before_it_is_claimed_again__then_it_is_deleted(
+    pg_dsn: str,
+    connection: asyncpg.Connection,
+    broker_class: type[Broker],
+) -> None:
+    # given
+    names = unique_names()
+    table = names["table_name"]
+    broker = broker_class(dsn=pg_dsn, processing_timeout=0.5, **FAST_POLL, **names)
+    await broker.startup()
+    listener = broker.listen()
+    try:
+        await insert_pending(connection, table, '{"n":1}', {})
+        claimed = await next_message(listener, timeout=3)
+        await connection.execute(f"UPDATE {table} SET status = 'pending', created_at = now() + interval '1 hour'")  # noqa: S608
+
+        # when: the worker finishes after its claim was released, but before the message is claimed again
+        await claimed.ack()  # type: ignore[misc]
+
+        # then
+        assert await status_of(connection, table, '{"n":1}') is None
+    finally:
+        await listener.aclose()
+        await broker.shutdown()

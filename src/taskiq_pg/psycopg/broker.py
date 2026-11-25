@@ -509,7 +509,8 @@ class PsycopgBroker(BasePostgresBroker):
     def _ackable(self, claimed: tuple[tp.Any, ...]) -> AckableMessage:
         """Wrap a claimed message; acknowledging it deletes the row."""
         message_id = int(claimed[0])
-        message_str = claimed[3]
+        message_str = claimed[1]
+        attempts = int(claimed[2])
         if not isinstance(message_str, str):
             msg = "Message is not a string"
             raise TypeError(msg)
@@ -518,7 +519,7 @@ class PsycopgBroker(BasePostgresBroker):
             async with self._write_pool.connection() as connection, connection.cursor() as cursor:
                 await cursor.execute(
                     sql.SQL(DELETE_MESSAGE_QUERY).format(sql.Identifier(self.table_name)),
-                    [message_id],
+                    [message_id, attempts],
                 )
 
         return AckableMessage(data=message_str.encode(), ack=ack)

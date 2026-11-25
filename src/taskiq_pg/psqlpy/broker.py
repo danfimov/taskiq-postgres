@@ -372,9 +372,10 @@ class PSQLPyBroker(BasePostgresBroker):
     def _ackable(self, claimed: MessageRow) -> AckableMessage:
         """Wrap a claimed message; acknowledging it deletes the row."""
         message_id = claimed.id
+        attempts = claimed.attempts
 
         async def ack() -> None:
             async with self._write_pool.acquire() as conn:
-                await conn.execute(DELETE_MESSAGE_QUERY.format(self.table_name), [message_id])
+                await conn.execute(DELETE_MESSAGE_QUERY.format(self.table_name), [message_id, attempts])
 
         return AckableMessage(data=claimed.message.encode(), ack=ack)

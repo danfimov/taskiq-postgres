@@ -67,10 +67,11 @@ RETURNING id
 CLAIM_MESSAGE_QUERY = """
 UPDATE {} SET status = 'processing', claimed_at = now(), attempts = attempts + 1
 WHERE id = $1 AND status = 'pending'
-RETURNING id, message
+RETURNING id, message, attempts
 """
 
-DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = $1"
+# Delete only the claim being acknowledged: after processing_timeout another worker may have claimed the row again.
+DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = $1 AND attempts = $2"
 
 CREATE_SCHEDULES_TABLE_QUERY = """
 CREATE TABLE IF NOT EXISTS {} (
@@ -121,7 +122,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, message
+RETURNING id, message, attempts
 """
 
 ADD_DELIVERY_COLUMNS_QUERY = """

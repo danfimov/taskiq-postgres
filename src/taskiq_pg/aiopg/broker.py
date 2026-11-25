@@ -437,6 +437,7 @@ class AiopgBroker(BasePostgresBroker):
         """Wrap a claimed message; acknowledging it deletes the row."""
         message_id = int(claimed[0])
         message_str = claimed[1]
+        attempts = int(claimed[2])
         if not isinstance(message_str, str):
             msg = "message is not a string"
             raise TypeError(msg)
@@ -446,6 +447,6 @@ class AiopgBroker(BasePostgresBroker):
                 msg = "Call startup before starting listening."
                 raise ValueError(msg)
             async with self._write_pool.acquire() as conn, conn.cursor() as cursor:
-                await cursor.execute(DELETE_MESSAGE_QUERY.format(self.table_name), (message_id,))
+                await cursor.execute(DELETE_MESSAGE_QUERY.format(self.table_name), (message_id, attempts))
 
         return AckableMessage(data=message_str.encode(), ack=ack)

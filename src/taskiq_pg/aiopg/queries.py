@@ -99,10 +99,11 @@ RETURNING id
 CLAIM_MESSAGE_QUERY = """
 UPDATE {} SET status = 'processing', claimed_at = now(), attempts = attempts + 1
 WHERE id = %s AND status = 'pending'
-RETURNING id, message
+RETURNING id, message, attempts
 """
 
-DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = %s"
+# Delete only the claim being acknowledged: after processing_timeout another worker may have claimed the row again.
+DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = %s AND attempts = %s"
 
 CREATE_PENDING_INDEX_QUERY = "CREATE INDEX IF NOT EXISTS {index} ON {table} (id) WHERE status = 'pending'"
 
@@ -121,7 +122,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, message
+RETURNING id, message, attempts
 """
 
 ADD_DELIVERY_COLUMNS_QUERY = """
