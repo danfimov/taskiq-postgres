@@ -13,6 +13,7 @@ from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
+from taskiq_pg._internal.tasks import cancel_and_wait
 from taskiq_pg.psqlpy.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -194,9 +195,7 @@ class PSQLPyBroker(BasePostgresBroker):
         """Close all connections on shutdown."""
         await super().shutdown()
         if self._listener_task is not None:
-            self._listener_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._listener_task
+            await cancel_and_wait(self._listener_task)
             self._listener_task = None
         if self._listener is not None:
             await self._listener.shutdown()
