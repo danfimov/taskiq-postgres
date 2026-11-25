@@ -213,10 +213,7 @@ class PsycopgBroker(BasePostgresBroker):
             message_inserted_id = int(row[0])
 
             delay_value = tp.cast("str | None", message.labels.get("delay"))
-            if delay_value is not None:
-                delay_seconds = int(delay_value)
-                await self._schedule_notification(message_inserted_id, delay_seconds)
-            else:
+            if delay_value is None:
                 # Send NOTIFY with message ID as payload
                 await cursor.execute(
                     sql.SQL("NOTIFY {}, {}").format(
@@ -224,6 +221,11 @@ class PsycopgBroker(BasePostgresBroker):
                         sql.Literal(str(message_inserted_id)),
                     ),
                 )
+                return
+
+        # The insert is committed once the connection is returned to the pool,
+        # so a delayed NOTIFY sent from here never reaches a worker before the row is visible.
+        await self._schedule_notification(message_inserted_id, int(delay_value))
 
     async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
