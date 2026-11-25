@@ -43,79 +43,13 @@ class MessageRow:
 class PSQLPyBroker(BasePostgresBroker):
     """Broker that uses PostgreSQL and PSQLPy with LISTEN/NOTIFY."""
 
-    _read_conn: psqlpy.Connection
     _write_pool: psqlpy.ConnectionPool
     _listener: psqlpy.Listener
     _listener_task: asyncio.Task[None] | None = None
     _queue: asyncio.Queue
     _owns_write_pool: bool
-    _owns_read_conn: bool
 
-    @tp.overload
     def __init__(
-        self,
-        dsn: str | Callable[[], str] = ...,
-        result_backend: AsyncResultBackend[_T] | None = ...,
-        task_id_generator: "Callable[[], str] | None" = ...,
-        channel_name: str = ...,
-        table_name: str = ...,
-        max_retry_attempts: int = ...,
-        read_kwargs: dict[str, tp.Any] | None = ...,
-        write_kwargs: dict[str, tp.Any] | None = ...,
-        *,
-        write_pool: None = ...,
-        read_connection: None = ...,
-    ) -> None: ...
-
-    @tp.overload
-    def __init__(
-        self,
-        dsn: str | Callable[[], str] = ...,
-        result_backend: AsyncResultBackend[_T] | None = ...,
-        task_id_generator: Callable[[], str] | None = ...,
-        channel_name: str = ...,
-        table_name: str = ...,
-        max_retry_attempts: int = ...,
-        read_kwargs: dict[str, tp.Any] | None = ...,
-        write_kwargs: dict[str, tp.Any] | None = ...,
-        *,
-        write_pool: psqlpy.ConnectionPool,
-        read_connection: None = ...,
-    ) -> None: ...
-
-    @tp.overload
-    def __init__(
-        self,
-        dsn: str | Callable[[], str] = ...,
-        result_backend: AsyncResultBackend[_T] | None = ...,
-        task_id_generator: Callable[[], str] | None = ...,
-        channel_name: str = ...,
-        table_name: str = ...,
-        max_retry_attempts: int = ...,
-        read_kwargs: dict[str, tp.Any] | None = ...,
-        write_kwargs: dict[str, tp.Any] | None = ...,
-        *,
-        write_pool: None = ...,
-        read_connection: psqlpy.Connection,
-    ) -> None: ...
-
-    @tp.overload
-    def __init__(
-        self,
-        dsn: str | Callable[[], str] = ...,
-        result_backend: AsyncResultBackend[_T] | None = ...,
-        task_id_generator: Callable[[], str] | None = ...,
-        channel_name: str = ...,
-        table_name: str = ...,
-        max_retry_attempts: int = ...,
-        read_kwargs: dict[str, tp.Any] | None = ...,
-        write_kwargs: dict[str, tp.Any] | None = ...,
-        *,
-        write_pool: psqlpy.ConnectionPool,
-        read_connection: psqlpy.Connection,
-    ) -> None: ...
-
-    def __init__(  # noqa: PLR0913
         self,
         dsn: str | Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         result_backend: AsyncResultBackend[_T] | None = None,
@@ -127,10 +61,11 @@ class PSQLPyBroker(BasePostgresBroker):
         write_kwargs: dict[str, tp.Any] | None = None,
         *,
         write_pool: psqlpy.ConnectionPool | None = None,
-        read_connection: psqlpy.Connection | None = None,
     ) -> None:
         """
         Construct a new PSQLPyBroker.
+
+        The broker LISTENs on a connection from the write pool.
 
         Args:
             dsn: PostgreSQL connection string or callable.
@@ -139,10 +74,9 @@ class PSQLPyBroker(BasePostgresBroker):
             channel_name: Name of the LISTEN/NOTIFY channel.
             table_name: Name of the table used to store messages.
             max_retry_attempts: Maximum number of message processing attempts.
-            read_kwargs: Extra kwargs forwarded to `psqlpy.connect()`
+            read_kwargs: Not used: there is no separate read connection.
             write_kwargs: Extra kwargs forwarded to `psqlpy.ConnectionPool()`
-            write_pool: An existing pool to reuse for writes.
-            read_connection: An existing connection to reuse for LISTEN.
+            write_pool: An existing pool to reuse for writes and LISTEN.
         """
         super().__init__(
             dsn=dsn,
@@ -160,20 +94,9 @@ class PSQLPyBroker(BasePostgresBroker):
             self._write_pool = write_pool
             self._owns_write_pool = False
 
-        self._owns_read_conn = True
-        if read_connection is not None:
-            self._read_conn = read_connection
-            self._owns_read_conn = False
-
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
-
-        if self._owns_read_conn:
-            self._read_conn = await psqlpy.connect(
-                dsn=self.dsn,
-                **self.read_kwargs,
-            )
 
         if self._owns_write_pool:
             self._write_pool = psqlpy.ConnectionPool(
@@ -199,8 +122,6 @@ class PSQLPyBroker(BasePostgresBroker):
             self._listener_task = None
         if self._listener is not None:
             await self._listener.shutdown()
-        if self._read_conn is not None and self._owns_read_conn:
-            self._read_conn.close()
         if self._write_pool is not None and self._owns_write_pool:
             self._write_pool.close()
 
