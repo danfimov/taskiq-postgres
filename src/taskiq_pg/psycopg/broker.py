@@ -11,6 +11,7 @@ from psycopg_pool import AsyncConnectionPool
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
 from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.retry import retry_delays
 from taskiq_pg.psycopg.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -125,6 +126,7 @@ class PsycopgBroker(BasePostgresBroker):
             write_kwargs: Extra kwargs forwarded to `AsyncConnectionPool()`.
             write_pool: An existing connection pool to reuse for writes.
             read_connection: An existing connection to reuse for LISTEN.
+                Its lifecycle, including reconnection, remains the caller's responsibility.
         """
         super().__init__(
             dsn=dsn,
@@ -151,14 +153,6 @@ class PsycopgBroker(BasePostgresBroker):
         """Initialize the broker."""
         await super().startup()
 
-        if self._owns_read_conn:
-            self._read_conn = await AsyncConnection.connect(
-                conninfo=self.dsn,
-                **self.read_kwargs,
-                autocommit=True,
-                cursor_factory=AsyncRawCursor,
-            )
-
         if self._owns_write_pool:
             self._write_pool = AsyncConnectionPool(
                 conninfo=self.dsn if self.dsn is not None else "",
@@ -172,8 +166,42 @@ class PsycopgBroker(BasePostgresBroker):
         async with self._write_pool.connection() as connection, connection.cursor() as cursor:
             await cursor.execute(sql.SQL(CREATE_MESSAGE_TABLE_QUERY).format(sql.Identifier(self.table_name)))
 
-        await self._read_conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(self.channel_name)))
-        self._notifies_iter = self._read_conn.notifies()
+        if self._owns_read_conn:
+            await self._connect_listener()
+        else:
+            await self._read_conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(self.channel_name)))
+            self._notifies_iter = self._read_conn.notifies()
+
+    async def _connect_listener(self) -> None:
+        """Open the broker-owned read connection and LISTEN on the channel."""
+        conn = await AsyncConnection.connect(
+            conninfo=self.dsn,
+            **self.read_kwargs,
+            autocommit=True,
+            cursor_factory=AsyncRawCursor,
+        )
+        try:
+            await conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(self.channel_name)))
+        except BaseException:
+            await conn.close()
+            raise
+        self._read_conn = conn
+        self._notifies_iter = conn.notifies()
+
+    async def _restore_listener(self) -> None:
+        """Reconnect the broker-owned LISTEN connection, retrying with randomized delays of up to 30 seconds."""
+        await self._read_conn.close()
+        delays = retry_delays()
+        while True:
+            try:
+                await self._connect_listener()
+            except Exception:  # noqa: PERF203
+                delay = next(delays)
+                logger.warning("LISTEN reconnect failed; retrying in %.1f seconds", delay, exc_info=True)
+                await asyncio.sleep(delay)
+            else:
+                logger.info("LISTEN connection restored on channel %s", self.channel_name)
+                return
 
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
@@ -182,8 +210,8 @@ class PsycopgBroker(BasePostgresBroker):
             with suppress(RuntimeError):  # RuntimeError: aclose(): asynchronous generator is already running
                 await self._notifies_iter.aclose()  # type: ignore[attr-defined]
         if self._read_conn is not None and self._owns_read_conn:
-                await self._read_conn.notifies().aclose()
-                await self._read_conn.close()
+            await self._read_conn.notifies().aclose()
+            await self._read_conn.close()
         if self._write_pool is not None and self._owns_write_pool:
             await self._write_pool.close()
 
@@ -240,8 +268,17 @@ class PsycopgBroker(BasePostgresBroker):
             )
 
     async def _listen_context(self) -> AsyncGenerator[str, None]:
-        async for notify in self._notifies_iter:
-            yield notify.payload
+        while True:
+            try:
+                async for notify in self._notifies_iter:
+                    yield notify.payload
+            except psycopg.OperationalError:  # noqa: PERF203
+                if not self._owns_read_conn:
+                    raise
+                logger.warning("LISTEN connection lost on channel %s; reconnecting", self.channel_name, exc_info=True)
+                await self._restore_listener()
+            else:
+                return
 
     async def listen(self) -> AsyncGenerator[AckableMessage, None]:
         """
