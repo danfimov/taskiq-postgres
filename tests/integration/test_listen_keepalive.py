@@ -72,7 +72,7 @@ async def test_when_keepalive_query_hangs__then_listener_reconnects(
 ) -> None:
     # given
     channel = f"keepalive_{uuid.uuid4().hex}"
-    broker = broker_class(dsn=pg_dsn, channel_name=channel, **FAST_KEEPALIVE)
+    broker = broker_class(dsn=pg_dsn, channel_name=channel, table_name=channel, **FAST_KEEPALIVE)
     keepalive_query = broker._keepalive_query  # noqa: SLF001
     hung = asyncio.Event()
 
@@ -118,6 +118,7 @@ async def _listen_backends_after_idle_period(
     broker = broker_class(
         dsn=pg_dsn,
         channel_name=channel,
+        table_name=channel,
         read_kwargs=read_kwargs,
         listen_keepalive_interval=keepalive_interval,
         listen_keepalive_timeout=1.0,
@@ -181,7 +182,7 @@ async def test_when_psycopg_keepalive_query_ignores_cancellation__then_hang_is_d
     """
     # given
     channel = f"keepalive_{uuid.uuid4().hex}"
-    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, **FAST_KEEPALIVE)
+    broker = PsycopgBroker(dsn=pg_dsn, channel_name=channel, table_name=channel, **FAST_KEEPALIVE)
     keepalive_query = broker._keepalive_query  # noqa: SLF001
     hung = asyncio.Event()
 

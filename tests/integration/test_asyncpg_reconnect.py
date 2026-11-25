@@ -40,7 +40,7 @@ async def test_listener_receives_messages_after_connection_loss(
     failures: int,
 ) -> None:
     """Resume receiving tasks after disconnection, including temporary database unavailability."""
-    broker = AsyncpgBroker(dsn=pg_dsn)
+    broker = AsyncpgBroker(dsn=pg_dsn, table_name=f"reconnect_{uuid.uuid4().hex}")
     await broker.startup()
     original = broker._read_conn  # noqa: SLF001
     assert original is not None

@@ -20,7 +20,7 @@ async def test_when_reconnect_attempts_fail__then_listener_keeps_retrying(
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = PSQLPyBroker(dsn=pg_dsn, channel_name=channel)
+    broker = PSQLPyBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     start_listener = broker._start_listener  # noqa: SLF001
     attempts = 0
@@ -70,7 +70,7 @@ async def test_when_shutdown_during_reconnect__then_reconnect_is_cancelled(
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = PSQLPyBroker(dsn=pg_dsn, channel_name=channel)
+    broker = PSQLPyBroker(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     connecting = asyncio.Event()
     cancelled = asyncio.Event()

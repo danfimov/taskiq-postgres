@@ -46,7 +46,7 @@ async def test_when_listen_connection_was_terminated__then_worker_received_next_
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"
-    broker = broker_class(dsn=pg_dsn, channel_name=channel)
+    broker = broker_class(dsn=pg_dsn, channel_name=channel, table_name=channel)
     await broker.startup()
     listener = broker.listen()
     task: asyncio.Task[tp.Any] = asyncio.create_task(listener.__anext__())
