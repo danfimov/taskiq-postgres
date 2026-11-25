@@ -11,9 +11,9 @@ from psqlpy.exceptions import ConnectionExecuteError
 from psqlpy.extra_types import JSONB
 from taskiq import AckableMessage, AsyncResultBackend, BrokerMessage
 
-from taskiq_pg._internal.broker import BasePostgresBroker
+from taskiq_pg._internal.broker import LISTEN_KEEPALIVE_QUERY, BasePostgresBroker
 from taskiq_pg._internal.retry import retry_delays
-from taskiq_pg._internal.tasks import cancel_and_wait
+from taskiq_pg._internal.tasks import cancel_and_wait, run_until_first_done
 from taskiq_pg.psqlpy.queries import (
     CLAIM_MESSAGE_QUERY,
     CREATE_MESSAGE_TABLE_QUERY,
@@ -49,7 +49,7 @@ class PSQLPyBroker(BasePostgresBroker):
     _queue: asyncio.Queue
     _owns_write_pool: bool
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         dsn: str | Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         result_backend: AsyncResultBackend[_T] | None = None,
@@ -60,6 +60,8 @@ class PSQLPyBroker(BasePostgresBroker):
         write_kwargs: dict[str, tp.Any] | None = None,
         *,
         write_pool: psqlpy.ConnectionPool | None = None,
+        listen_keepalive_interval: float | None = 30.0,
+        listen_keepalive_timeout: float = 5.0,
     ) -> None:
         """
         Construct a new PSQLPyBroker.
@@ -75,6 +77,9 @@ class PSQLPyBroker(BasePostgresBroker):
             max_retry_attempts: Maximum number of message processing attempts.
             write_kwargs: Extra kwargs forwarded to `psqlpy.ConnectionPool()`
             write_pool: An existing pool to reuse for writes and LISTEN.
+            listen_keepalive_interval: How often, in seconds, to check the broker-owned LISTEN connection
+                with a query; None disables the check.
+            listen_keepalive_timeout: How long, in seconds, to wait for the check before reconnecting.
         """
         super().__init__(
             dsn=dsn,
@@ -84,6 +89,8 @@ class PSQLPyBroker(BasePostgresBroker):
             table_name=table_name,
             max_retry_attempts=max_retry_attempts,
             write_kwargs=write_kwargs,
+            listen_keepalive_interval=listen_keepalive_interval,
+            listen_keepalive_timeout=listen_keepalive_timeout,
         )
 
         self._owns_write_pool = True
@@ -152,13 +159,10 @@ class PSQLPyBroker(BasePostgresBroker):
         """Move notifications into the queue and restore LISTEN after connection loss."""
         while True:
             try:
-                async for message in self._listener:
-                    await self._notification_handler(
-                        message.connection,
-                        message.payload,
-                        message.channel,
-                        message.process_id,
-                    )
+                if self.listen_keepalive_interval is None:
+                    await self._move_notifications(self._listener)
+                else:
+                    await run_until_first_done(self._move_notifications(self._listener), self._keepalive())
             except Exception:
                 logger.warning("LISTEN connection lost on channel %s; reconnecting", self.channel_name, exc_info=True)
             else:
@@ -166,6 +170,33 @@ class PSQLPyBroker(BasePostgresBroker):
             with suppress(Exception):
                 await self._listener.shutdown()
             self._listener = await self._restore_listener()
+
+    async def _move_notifications(self, listener: psqlpy.Listener) -> None:
+        """Move notifications from the listener into the queue until it stops or its connection is lost."""
+        async for message in listener:
+            await self._notification_handler(
+                message.connection,
+                message.payload,
+                message.channel,
+                message.process_id,
+            )
+
+    async def _keepalive(self) -> None:
+        """Run the keepalive query every interval; raise when it does not answer in time."""
+        interval = self.listen_keepalive_interval
+        if interval is None:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await asyncio.wait_for(self._keepalive_query(), self.listen_keepalive_timeout)
+            except TimeoutError as exc:
+                msg = "LISTEN connection did not answer a keepalive query"
+                raise ConnectionError(msg) from exc
+
+    async def _keepalive_query(self) -> None:
+        """Run a trivial query on the listener connection."""
+        await self._listener.connection.execute(LISTEN_KEEPALIVE_QUERY)
 
     async def _restore_listener(self) -> psqlpy.Listener:
         """Create a new listener, retrying with randomized delays of up to 30 seconds."""
