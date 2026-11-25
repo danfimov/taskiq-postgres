@@ -8,10 +8,11 @@ from taskiq import AckableMessage
 from tests.integration.test_polling import insert_pending, unique_names
 
 from taskiq_pg.asyncpg import AsyncpgBroker
+from taskiq_pg.psycopg import PsycopgBroker
 
 
-Broker: tp.TypeAlias = AsyncpgBroker
-BROKERS: list[tp.Any] = [AsyncpgBroker]
+Broker: tp.TypeAlias = AsyncpgBroker | PsycopgBroker
+BROKERS: list[tp.Any] = [AsyncpgBroker, PsycopgBroker]
 
 FAST_POLL: dict[str, float] = {"poll_interval": 0.2}
 
