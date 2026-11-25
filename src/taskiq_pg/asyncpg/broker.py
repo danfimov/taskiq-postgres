@@ -44,6 +44,7 @@ class AsyncpgBroker(BasePostgresBroker):
     _owns_read_conn: bool
     _listener_task: asyncio.Task[None] | None = None
     _listener_disconnected: asyncio.Event
+    _notify_tasks: set[asyncio.Task[None]]
 
     @tp.overload
     def __init__(
@@ -190,6 +191,8 @@ class AsyncpgBroker(BasePostgresBroker):
             self._read_conn = read_connection
             self._owns_read_conn = False
 
+        self._notify_tasks = set()
+
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
@@ -231,6 +234,8 @@ class AsyncpgBroker(BasePostgresBroker):
         if self._listener_task is not None:
             await cancel_and_wait(self._listener_task)
             self._listener_task = None
+        for task in list(self._notify_tasks):
+            await cancel_and_wait(task)
         await super().shutdown()
         if self._read_conn is not None:
             self._read_conn.remove_termination_listener(self._connection_terminated)
@@ -381,9 +386,10 @@ class AsyncpgBroker(BasePostgresBroker):
             )
 
             if delay_seconds is not None:
-                _ = asyncio.create_task(  # noqa: RUF006
-                    self._schedule_notification(message_inserted_id, delay_seconds),
-                )
+                # Keep a reference, so the task is not garbage collected, and cancel it on shutdown.
+                task = asyncio.create_task(self._schedule_notification(message_inserted_id, delay_seconds))
+                self._notify_tasks.add(task)
+                task.add_done_callback(self._notify_tasks.discard)
             else:
                 # Send a NOTIFY with the message ID as payload
                 _ = await conn.execute(
