@@ -62,6 +62,7 @@ class PSQLPyBroker(BasePostgresBroker):
     _listener_task: asyncio.Task[None] | None = None
     _queue: asyncio.Queue
     _owns_write_pool: bool
+    _notify_tasks: set[asyncio.Task[None]]
 
     def __init__(  # noqa: PLR0913
         self,
@@ -119,6 +120,8 @@ class PSQLPyBroker(BasePostgresBroker):
             self._write_pool = write_pool
             self._owns_write_pool = False
 
+        self._notify_tasks = set()
+
     async def startup(self) -> None:
         """Initialize the broker."""
         await super().startup()
@@ -165,6 +168,8 @@ class PSQLPyBroker(BasePostgresBroker):
         if self._listener_task is not None:
             await cancel_and_wait(self._listener_task)
             self._listener_task = None
+        for task in list(self._notify_tasks):
+            await cancel_and_wait(task)
         # startup() may have failed before creating these
         listener = getattr(self, "_listener", None)
         if listener is not None:
@@ -300,9 +305,10 @@ class PSQLPyBroker(BasePostgresBroker):
             )
 
             if delay_seconds is not None:
-                asyncio.create_task(  # noqa: RUF006
-                    self._schedule_notification(message_inserted_id, delay_seconds),
-                )
+                # Keep a reference, so the task is not garbage collected, and cancel it on shutdown.
+                task = asyncio.create_task(self._schedule_notification(message_inserted_id, delay_seconds))
+                self._notify_tasks.add(task)
+                task.add_done_callback(self._notify_tasks.discard)
             else:
                 # Send NOTIFY with message ID as payload
                 _ = await conn.execute(
