@@ -155,9 +155,8 @@ async def test_psycopg_broker_uses_provided_read_connection(pg_dsn: str) -> None
 async def test_psqlpy_shared_pool_not_closed_after_shutdown(pg_dsn: str) -> None:
     """Pool stays usable after broker, result_backend and schedule_source shut down."""
     pool = psqlpy.ConnectionPool(dsn=pg_dsn)
-    read_conn = await psqlpy.connect(dsn=pg_dsn)
 
-    broker = PSQLPyBroker(write_pool=pool, read_connection=read_conn)
+    broker = PSQLPyBroker(write_pool=pool)
     result_backend = PSQLPyResultBackend(
         dsn=pg_dsn,
         table_name=f"taskiq_results_{uuid.uuid4().hex}",
@@ -188,7 +187,7 @@ async def test_psqlpy_shared_pool_not_closed_after_shutdown(pg_dsn: str) -> None
 
 @pytest.mark.integration
 async def test_psqlpy_broker_uses_provided_write_pool(pg_dsn: str) -> None:
-    """Broker created with only write_pool creates its own read connection."""
+    """Broker created with a write_pool uses it and does not close it."""
     pool = psqlpy.ConnectionPool(dsn=pg_dsn)
 
     broker = PSQLPyBroker(dsn=pg_dsn, write_pool=pool)
@@ -200,17 +199,3 @@ async def test_psqlpy_broker_uses_provided_write_pool(pg_dsn: str) -> None:
     assert result.result()[0]["val"] == 1
 
     pool.close()
-
-
-@pytest.mark.integration
-async def test_psqlpy_broker_uses_provided_read_connection(pg_dsn: str) -> None:
-    """Broker created with only read_connection creates its own pool."""
-    read_conn = await psqlpy.connect(dsn=pg_dsn)
-
-    broker = PSQLPyBroker(dsn=pg_dsn, read_connection=read_conn)
-    await broker.startup()
-    await broker.shutdown()
-
-    # Connection must still be alive — run a query on it
-    result = await read_conn.fetch("SELECT 1 AS val")
-    assert result.result()[0]["val"] == 1
