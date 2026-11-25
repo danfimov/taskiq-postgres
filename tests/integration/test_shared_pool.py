@@ -1,11 +1,13 @@
 import uuid
 
+import aiopg
 import asyncpg
 import psqlpy
 import pytest
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
+from taskiq_pg.aiopg import AiopgBroker
 from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgResultBackend, AsyncpgScheduleSource
 from taskiq_pg.psqlpy import PSQLPyBroker, PSQLPyResultBackend, PSQLPyScheduleSource
 from taskiq_pg.psycopg import PsycopgBroker, PsycopgResultBackend, PsycopgScheduleSource
@@ -199,3 +201,36 @@ async def test_psqlpy_broker_uses_provided_write_pool(pg_dsn: str) -> None:
     assert result.result()[0]["val"] == 1
 
     pool.close()
+
+
+@pytest.mark.integration
+async def test_aiopg_broker_uses_provided_write_pool(pg_dsn: str) -> None:
+    """Broker created with a write_pool uses it and does not close it."""
+    pool = await aiopg.create_pool(pg_dsn)
+
+    broker = AiopgBroker(dsn=pg_dsn, write_pool=pool)
+    await broker.startup()
+    await broker.shutdown()
+
+    async with pool.acquire() as conn, conn.cursor() as cursor:
+        await cursor.execute("SELECT 1")
+        assert await cursor.fetchone() == (1,)
+
+    pool.close()
+    await pool.wait_closed()
+
+
+@pytest.mark.integration
+async def test_aiopg_broker_uses_provided_read_connection(pg_dsn: str) -> None:
+    """Broker created with a read_connection uses it, does not close it and stops listening on shutdown."""
+    read_conn = await aiopg.connect(pg_dsn)
+
+    broker = AiopgBroker(dsn=pg_dsn, read_connection=read_conn)
+    await broker.startup()
+    await broker.shutdown()
+
+    async with read_conn.cursor() as cursor:
+        await cursor.execute("SELECT count(*) FROM pg_listening_channels()")
+        assert await cursor.fetchone() == (0,)
+
+    await read_conn.close()

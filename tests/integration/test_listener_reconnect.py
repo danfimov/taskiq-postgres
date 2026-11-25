@@ -6,6 +6,7 @@ import asyncpg
 import pytest
 from taskiq import BrokerMessage
 
+from taskiq_pg.aiopg import AiopgBroker
 from taskiq_pg.asyncpg import AsyncpgBroker
 from taskiq_pg.psqlpy import PSQLPyBroker
 from taskiq_pg.psycopg import PsycopgBroker
@@ -35,12 +36,13 @@ async def wait_for_new_listen_backend(connection: asyncpg.Connection, channel: s
         AsyncpgBroker,
         PsycopgBroker,
         PSQLPyBroker,
+        AiopgBroker,
     ],
 )
 async def test_when_listen_connection_was_terminated__then_worker_received_next_message(
     pg_dsn: str,
     connection: asyncpg.Connection,
-    broker_class: type[AsyncpgBroker | PsycopgBroker | PSQLPyBroker],
+    broker_class: type[AiopgBroker | AsyncpgBroker | PsycopgBroker | PSQLPyBroker],
 ) -> None:
     # given
     channel = f"reconnect_{uuid.uuid4().hex}"

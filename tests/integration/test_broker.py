@@ -6,6 +6,7 @@ import asyncpg
 import pytest
 from taskiq import BrokerMessage
 
+from taskiq_pg.aiopg import AiopgBroker
 from taskiq_pg.asyncpg import AsyncpgBroker
 from taskiq_pg.psqlpy import PSQLPyBroker
 from taskiq_pg.psycopg import PsycopgBroker
@@ -15,7 +16,7 @@ from taskiq_pg.psycopg import PsycopgBroker
 async def broker(
     pg_dsn: str,
     request: pytest.FixtureRequest,
-) -> tp.AsyncGenerator[AsyncpgBroker | PSQLPyBroker | PsycopgBroker, None]:
+) -> tp.AsyncGenerator[AiopgBroker | AsyncpgBroker | PSQLPyBroker | PsycopgBroker, None]:
     broker = request.param(dsn=pg_dsn)
     await broker.startup()
     try:
@@ -28,7 +29,7 @@ async def broker(
 async def broker_2(
     pg_dsn: str,
     request: pytest.FixtureRequest,
-) -> tp.AsyncGenerator[AsyncpgBroker | PSQLPyBroker | PsycopgBroker, None]:
+) -> tp.AsyncGenerator[AiopgBroker | AsyncpgBroker | PSQLPyBroker | PsycopgBroker, None]:
     broker = request.param(dsn=pg_dsn)
     await broker.startup()
     try:
@@ -43,6 +44,7 @@ async def broker_2(
         AsyncpgBroker,
         PSQLPyBroker,
         PsycopgBroker,
+        AiopgBroker,
     ],
     indirect=True,
 )
@@ -79,6 +81,7 @@ async def test_when_message_was_published__then_worker_received_message(
         (AsyncpgBroker, AsyncpgBroker),
         (PSQLPyBroker, PSQLPyBroker),
         (PsycopgBroker, PsycopgBroker),
+        (AiopgBroker, AiopgBroker),
     ],
     indirect=True,
 )
@@ -148,6 +151,7 @@ async def test_when_two_workers_listen__then_single_message_processed_once(
         AsyncpgBroker,
         PSQLPyBroker,
         PsycopgBroker,
+        AiopgBroker,
     ],
     indirect=True,
 )

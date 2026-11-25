@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from taskiq_pg.aiopg import AiopgBroker
 from taskiq_pg.asyncpg import AsyncpgBroker
 from taskiq_pg.psqlpy import PSQLPyBroker
 
@@ -21,12 +22,13 @@ async def slow_to_cancel() -> None:
     [
         (AsyncpgBroker, "_restore_listener"),
         (PSQLPyBroker, "_consume_notifications"),
+        (AiopgBroker, "_consume_notifications"),
     ],
 )
 async def test_when_shutdown_is_cancelled__then_cancellation_is_propagated(
     pg_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
-    broker_class: type[AsyncpgBroker | PSQLPyBroker],
+    broker_class: type[AiopgBroker | AsyncpgBroker | PSQLPyBroker],
     listener_method: str,
 ) -> None:
     # given
