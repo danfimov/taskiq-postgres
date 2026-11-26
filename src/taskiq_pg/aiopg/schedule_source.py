@@ -30,7 +30,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = ...,
         table_name: str = ...,
-        keep_schedules: bool = ...,
         *,
         pool: None = ...,
         **connect_kwargs: tp.Any,
@@ -42,7 +41,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = ...,
         table_name: str = ...,
-        keep_schedules: bool = ...,
         *,
         pool: Pool,
     ) -> None: ...
@@ -52,7 +50,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         table_name: str = "taskiq_schedules",
-        keep_schedules: bool = False,
         *,
         pool: Pool | None = None,
         **connect_kwargs: tp.Any,
@@ -64,7 +61,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             broker: The TaskIQ broker instance.
             dsn: PostgreSQL connection string or callable. Ignored in pool mode.
             table_name: Table to store schedules in.
-            keep_schedules: Whether or not to keep schedules created on previous run.
             pool: An existing connection pool to reuse.
             **connect_kwargs: Extra kwargs for connection pool creation.
         """
@@ -77,7 +73,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             broker=broker,
             dsn=dsn,
             table_name=table_name,
-            keep_schedules=keep_schedules,
             **connect_kwargs,
         )
 
@@ -113,10 +108,9 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
                 await cursor.execute(CREATE_SCHEDULES_TABLE_QUERY.format(self._table_name))
 
-            if not self._keep_schedules:
-                logger.debug("Refreshing schedules table")
-                scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
-                await self._update_schedules_on_startup(scheduled_tasks_for_creation)
+            logger.debug("Refreshing schedules table")
+            scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
+            await self._update_schedules_on_startup(scheduled_tasks_for_creation)
         except Exception as error:
             raise exceptions.DatabaseConnectionError(str(error)) from error
 

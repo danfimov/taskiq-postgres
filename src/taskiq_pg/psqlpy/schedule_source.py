@@ -31,7 +31,6 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: "str | tp.Callable[[], str]" = ...,
         table_name: str = ...,
-        keep_schedules: bool = ...,
         *,
         pool: None = ...,
         **connect_kwargs: tp.Any,
@@ -43,7 +42,6 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: "str | tp.Callable[[], str]" = ...,
         table_name: str = ...,
-        keep_schedules: bool = ...,
         *,
         pool: ConnectionPool,
     ) -> None: ...
@@ -53,7 +51,6 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
         broker: AsyncBroker,
         dsn: "str | tp.Callable[[], str]" = "postgresql://postgres:postgres@localhost:5432/postgres",
         table_name: str = "taskiq_schedules",
-        keep_schedules: bool = False,
         *,
         pool: ConnectionPool | None = None,
         **connect_kwargs: tp.Any,
@@ -65,7 +62,6 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
             broker: The TaskIQ broker instance.
             dsn: PostgreSQL connection string or callable. Ignored in pool mode.
             table_name: Table to store schedules in.
-            keep_schedules: Whether or not to keep schedules created on previous run.
             pool: An existing connection pool to reuse.
             **connect_kwargs: Extra kwargs for connection pool creation.
         """
@@ -79,7 +75,6 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
             broker=broker,
             dsn=dsn,
             table_name=table_name,
-            keep_schedules=keep_schedules,
             **connect_kwargs,
         )
 
@@ -125,10 +120,9 @@ class PSQLPyScheduleSource(BasePostgresScheduleSource):
                 ),
             )
 
-        if not self._keep_schedules:
-            logger.debug("Refreshing schedules table")
-            scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
-            await self._update_schedules_on_startup(scheduled_tasks_for_creation)
+        logger.debug("Refreshing schedules table")
+        scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
+        await self._update_schedules_on_startup(scheduled_tasks_for_creation)
 
     async def shutdown(self) -> None:
         """Close the connection pool if was created by this schedule source."""

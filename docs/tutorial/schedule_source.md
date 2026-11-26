@@ -82,25 +82,6 @@ You can also add schedules in runtime using `add_schedule` method of the schedul
       await schedule_source.add_schedule(ScheduledTask(...))
   ```
 
-## Keeping schedules between runs
-
-By default, on every startup the schedule source refreshes the schedules table: it deletes all stored schedules
-and creates new ones from schedules declared in broker tasks. This means schedules added in runtime (see above) are
-lost after a restart.
-
-If you want to keep schedules from the previous run, pass `keep_schedules=True` to the schedule source:
-
-  ```python
-  schedule_source = AsyncpgScheduleSource(
-      dsn=dsn,
-      broker=broker,
-      keep_schedules=True,
-  )
-  ```
-
-With this flag, startup no longer deletes or re-creates schedules: the table is only created if it doesn't exist
-yet, and all previously stored schedules are kept as they are.
-
 ## Using multiple schedules
 
 You can use multiple schedules for one task. Just provide a list of schedules to the `@broker.task` decorator:

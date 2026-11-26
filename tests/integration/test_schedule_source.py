@@ -1,7 +1,6 @@
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import Any
 
 import pytest
 from polyfactory.factories.pydantic_factory import ModelFactory
@@ -32,9 +31,8 @@ async def _get_schedule_source(
     schedule_source_class: type[BasePostgresScheduleSource],
     broker: BasePostgresBroker,
     dsn: str,
-    **kwargs: Any,
 ):
-    schedule_source = schedule_source_class(broker, dsn, **kwargs)
+    schedule_source = schedule_source_class(broker, dsn)
     try:
         yield schedule_source
     finally:
@@ -212,49 +210,7 @@ async def test_when_call_delete_schedule__then_schedule_deleted(
         PsycopgScheduleSource,
     ],
 )
-async def test_when_keep_schedules__then_schedules_from_previous_run_kept(
-    pg_dsn: str,
-    broker_with_scheduled_tasks: PSQLPyBroker,
-    schedule_source_class: type[PSQLPyScheduleSource | AiopgScheduleSource | AsyncpgScheduleSource],
-) -> None:
-    # Given
-    new_schedule = ScheduledTaskFactory.build(
-        task_name="tests:added_schedule",
-        cron="*/5 * * * *",
-        interval=None,
-        schedule_id=str(uuid.uuid4()),
-    )
-    async with _get_schedule_source(schedule_source_class, broker_with_scheduled_tasks, pg_dsn) as schedule_source:
-        await schedule_source.startup()
-        await schedule_source.add_schedule(new_schedule)
-        assert len(await schedule_source.get_schedules()) == 4
-
-    # When
-    async with _get_schedule_source(
-        schedule_source_class,
-        broker_with_scheduled_tasks,
-        pg_dsn,
-        keep_schedules=True,
-    ) as schedule_source:
-        await schedule_source.startup()
-
-        # Then
-        schedules: list[ScheduledTask] = await schedule_source.get_schedules()
-        assert len(schedules) == 4
-        assert any(task.schedule_id == new_schedule.schedule_id for task in schedules)
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize(
-    "schedule_source_class",
-    [
-        PSQLPyScheduleSource,
-        AiopgScheduleSource,
-        AsyncpgScheduleSource,
-        PsycopgScheduleSource,
-    ],
-)
-async def test_when_not_keep_schedules__then_schedules_from_previous_run_reset(
+async def test_when_starting_source_again__then_schedules_are_reset(
     pg_dsn: str,
     broker_with_scheduled_tasks: PSQLPyBroker,
     schedule_source_class: type[PSQLPyScheduleSource | AiopgScheduleSource | AsyncpgScheduleSource],
