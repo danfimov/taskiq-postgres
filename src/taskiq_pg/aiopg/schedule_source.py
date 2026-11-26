@@ -1,21 +1,16 @@
 import typing as tp
-from logging import getLogger
 
 from aiopg import Pool, create_pool
-from taskiq import AsyncBroker, ScheduledTask
+from taskiq import ScheduledTask
 
 from taskiq_pg import exceptions
 from taskiq_pg._internal import BasePostgresScheduleSource
 from taskiq_pg.aiopg.queries import (
     CREATE_SCHEDULES_TABLE_QUERY,
-    DELETE_ALL_SCHEDULES_QUERY,
     DELETE_SCHEDULE_QUERY,
     INSERT_SCHEDULE_QUERY,
     SELECT_SCHEDULES_QUERY,
 )
-
-
-logger = getLogger("taskiq_pg.aiopg_schedule_source")
 
 
 class AiopgScheduleSource(BasePostgresScheduleSource):
@@ -27,7 +22,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
     @tp.overload
     def __init__(
         self,
-        broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = ...,
         table_name: str = ...,
         *,
@@ -38,7 +32,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
     @tp.overload
     def __init__(
         self,
-        broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = ...,
         table_name: str = ...,
         *,
@@ -47,7 +40,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
 
     def __init__(
         self,
-        broker: AsyncBroker,
         dsn: str | tp.Callable[[], str] = "postgresql://postgres:postgres@localhost:5432/postgres",
         table_name: str = "taskiq_schedules",
         *,
@@ -58,7 +50,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
         Construct a new AiopgScheduleSource.
 
         Args:
-            broker: The TaskIQ broker instance.
             dsn: PostgreSQL connection string or callable. Ignored in pool mode.
             table_name: Table to store schedules in.
             pool: An existing connection pool to reuse.
@@ -70,34 +61,16 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
             self._database_pool = pool
 
         super().__init__(
-            broker=broker,
             dsn=dsn,
             table_name=table_name,
             **connect_kwargs,
         )
 
-    async def _update_schedules_on_startup(self, schedules: list[ScheduledTask]) -> None:
-        """Update schedules in the database on startup: truncate table and insert new ones."""
-        async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
-            await cursor.execute(DELETE_ALL_SCHEDULES_QUERY.format(self._table_name))
-            for schedule in schedules:
-                await cursor.execute(
-                    INSERT_SCHEDULE_QUERY.format(self._table_name),
-                    [
-                        schedule.schedule_id,
-                        schedule.task_name,
-                        schedule.model_dump_json(
-                            exclude={"schedule_id", "task_name"},
-                        ),
-                    ],
-                )
-
     async def startup(self) -> None:
         """
         Initialize the schedule source.
 
-        Construct new connection pool (if not provided externally), create new table for schedules if not exists
-        and fill table with schedules from task labels.
+        Construct new connection pool (if not provided externally), create new table for schedules if not exists.
         """
         try:
             if self._owns_pool:
@@ -107,8 +80,6 @@ class AiopgScheduleSource(BasePostgresScheduleSource):
                 )
             async with self._database_pool.acquire() as connection, connection.cursor() as cursor:
                 await cursor.execute(CREATE_SCHEDULES_TABLE_QUERY.format(self._table_name))
-            scheduled_tasks_for_creation = self.extract_scheduled_tasks_from_broker()
-            await self._update_schedules_on_startup(scheduled_tasks_for_creation)
         except Exception as error:
             raise exceptions.DatabaseConnectionError(str(error)) from error
 

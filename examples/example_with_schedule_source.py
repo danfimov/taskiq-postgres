@@ -11,6 +11,7 @@ How to run:
 import asyncio
 
 from taskiq import TaskiqScheduler
+from taskiq.schedule_sources import LabelScheduleSource
 
 from taskiq_pg.psycopg import PsycopgBroker, PsycopgScheduleSource
 
@@ -20,10 +21,8 @@ broker = PsycopgBroker(dsn)
 scheduler = TaskiqScheduler(
     broker=broker,
     sources=[
-        PsycopgScheduleSource(
-            dsn=dsn,
-            broker=broker,
-        ),
+        LabelScheduleSource(broker),
+        PsycopgScheduleSource(dsn=dsn),
     ],
 )
 

@@ -97,10 +97,6 @@ SELECT id, task_name, schedule
 FROM {};
 """
 
-DELETE_ALL_SCHEDULES_QUERY = """
-DELETE FROM {};
-"""
-
 DELETE_SCHEDULE_QUERY = """
 DELETE FROM {} WHERE id = %s;
 """
