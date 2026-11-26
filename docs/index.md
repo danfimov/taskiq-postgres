@@ -200,6 +200,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
         # scheduler_example.py
         import asyncio
         from taskiq import TaskiqScheduler
+        from taskiq.schedule_sources import LabelScheduleSource
         from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgScheduleSource
 
 
@@ -207,10 +208,10 @@ Your experience with other drivers will be pretty similar. Just change the impor
         broker = AsyncpgBroker(dsn)
         scheduler = TaskiqScheduler(
             broker=broker,
-            sources=[AsyncpgScheduleSource(
-                dsn=dsn,
-                broker=broker,
-            )],
+            sources=[
+                LabelScheduleSource(broker),
+                AsyncpgScheduleSource(dsn=dsn),
+            ],
         )
 
 
@@ -239,6 +240,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
         # scheduler_example.py
         import asyncio
         from taskiq import TaskiqScheduler
+        from taskiq.schedule_sources import LabelScheduleSource
         from taskiq_pg.psqlpy import PSQLPyBroker, PSQLPyScheduleSource
 
 
@@ -246,10 +248,10 @@ Your experience with other drivers will be pretty similar. Just change the impor
         broker = PSQLPyBroker(dsn)
         scheduler = TaskiqScheduler(
             broker=broker,
-            sources=[PSQLPyScheduleSource(
-                dsn=dsn,
-                broker=broker,
-            )],
+            sources=[
+                LabelScheduleSource(broker),
+                PSQLPyScheduleSource(dsn=dsn),
+            ],
         )
 
 
@@ -279,6 +281,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
         # scheduler_example.py
         import asyncio
         from taskiq import TaskiqScheduler
+        from taskiq.schedule_sources import LabelScheduleSource
         from taskiq_pg.psycopg import PsycopgBroker, PsycopgScheduleSource
 
 
@@ -286,10 +289,10 @@ Your experience with other drivers will be pretty similar. Just change the impor
         broker = PsycopgBroker(dsn)
         scheduler = TaskiqScheduler(
             broker=broker,
-            sources=[PsycopgScheduleSource(
-                dsn=dsn,
-                broker=broker,
-            )],
+            sources=[
+                LabelScheduleSource(broker),
+                PsycopgScheduleSource(dsn=dsn),
+            ],
         )
 
 
@@ -319,6 +322,7 @@ Your experience with other drivers will be pretty similar. Just change the impor
         # scheduler_example.py
         import asyncio
         from taskiq import TaskiqScheduler
+        from taskiq.schedule_sources import LabelScheduleSource
         from taskiq_pg.aiopg import AiopgBroker, AiopgScheduleSource
 
 
@@ -326,10 +330,10 @@ Your experience with other drivers will be pretty similar. Just change the impor
         broker = AiopgBroker(dsn)
         scheduler = TaskiqScheduler(
             broker=broker,
-            sources=[AiopgScheduleSource(
-                dsn=dsn,
-                broker=broker,
-            )],
+            sources=[
+                LabelScheduleSource(broker),
+                AiopgScheduleSource(dsn=dsn),
+            ],
         )
 
 

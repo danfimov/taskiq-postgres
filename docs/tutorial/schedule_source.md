@@ -4,14 +4,16 @@ title: Schedule Source
 
 ## Basic usage
 
-The easiest way to schedule task with this library is to add `schedule` label to task. Schedule source will automatically
-parse this label and add new schedule to database on start of scheduler.
+The PostgreSQL schedule source stores schedules in a database table: the schedules you add in runtime
+(see below) and the ones you pre-populate the table with. They all survive application restarts.
 
-You can define your scheduled task like this:
+Schedules declared in task labels are not read by this source: they are handled by taskiq's built-in
+`LabelScheduleSource`. Add both sources to your scheduler:
 
   ```python
   import asyncio
   from taskiq import TaskiqScheduler
+  from taskiq.schedule_sources import LabelScheduleSource
   from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgScheduleSource
 
 
@@ -19,10 +21,10 @@ You can define your scheduled task like this:
   broker = AsyncpgBroker(dsn)
   scheduler = TaskiqScheduler(
       broker=broker,
-      sources=[AsyncpgScheduleSource(
-          dsn=dsn,
-          broker=broker,
-      )],
+      sources=[
+          LabelScheduleSource(broker),    # schedules declared in task labels
+          AsyncpgScheduleSource(dsn=dsn), # schedules stored in PostgreSQL
+      ],
   )
 
 
@@ -59,10 +61,7 @@ You can also add schedules in runtime using `add_schedule` method of the schedul
 
   dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
   broker = AsyncpgBroker(dsn)
-  schedule_source = AsyncpgScheduleSource(
-      dsn=dsn,
-      broker=broker,
-  )
+  schedule_source = AsyncpgScheduleSource(dsn=dsn)
   scheduler = TaskiqScheduler(
       broker=broker,
       sources=[schedule_source],
@@ -82,13 +81,19 @@ You can also add schedules in runtime using `add_schedule` method of the schedul
       await schedule_source.add_schedule(ScheduledTask(...))
   ```
 
+Schedules stored in the database are never deleted on startup — they survive restarts.
+One-shot (`time`) schedules are removed automatically after they fire.
+
 ## Using multiple schedules
 
-You can use multiple schedules for one task. Just provide a list of schedules to the `@broker.task` decorator:
+You can use multiple schedules for one task. Just provide a list of schedules to the `@broker.task` decorator.
+These label-based schedules are picked up by `LabelScheduleSource`; the PostgreSQL source only stores
+the schedules you add via `add_schedule`:
 
 ```python
 import asyncio
 from taskiq import TaskiqScheduler
+from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_pg.asyncpg import AsyncpgBroker, AsyncpgScheduleSource
 
 
@@ -96,10 +101,10 @@ dsn = "postgres://taskiq_postgres:look_in_vault@localhost:5432/taskiq_postgres"
 broker = AsyncpgBroker(dsn)
 scheduler = TaskiqScheduler(
     broker=broker,
-    sources=[AsyncpgScheduleSource(
-        dsn=dsn,
-        broker=broker,
-    )],
+    sources=[
+        LabelScheduleSource(broker),
+        AsyncpgScheduleSource(dsn=dsn),
+    ],
 )
 
 

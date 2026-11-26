@@ -40,7 +40,7 @@ async def main() -> None:
         PsycopgResultBackend(pool=pool)
     )
 
-    schedule_source = PsycopgScheduleSource(broker=broker, pool=pool)
+    schedule_source = PsycopgScheduleSource(pool=pool)
     scheduler = TaskiqScheduler(broker=broker, sources=[schedule_source])
 
     await broker.startup()
