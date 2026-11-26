@@ -25,7 +25,6 @@ async def test_asyncpg_shared_pool_not_closed_after_shutdown(pg_dsn: str) -> Non
         pool=pool,
     )
     schedule_source = AsyncpgScheduleSource(
-        broker=broker,
         dsn=pg_dsn,
         table_name=f"taskiq_schedules_{uuid.uuid4().hex}",
         pool=pool,
@@ -92,7 +91,6 @@ async def test_psycopg_shared_pool_not_closed_after_shutdown(pg_dsn: str) -> Non
         pool=pool,
     )
     schedule_source = PsycopgScheduleSource(
-        broker=broker,
         dsn=pg_dsn,
         table_name=f"taskiq_schedules_{uuid.uuid4().hex}",
         pool=pool,
@@ -165,7 +163,6 @@ async def test_psqlpy_shared_pool_not_closed_after_shutdown(pg_dsn: str) -> None
         pool=pool,
     )
     schedule_source = PSQLPyScheduleSource(
-        broker=broker,
         dsn=pg_dsn,
         table_name=f"taskiq_schedules_{uuid.uuid4().hex}",
         pool=pool,
